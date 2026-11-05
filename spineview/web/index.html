@@ -1,0 +1,2210 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>spineview — Spine 檢視器</title>
+<style>
+  :root {
+    --bg: #16171b; --panel: #1e2026; --panel-2: #24262e; --line: #33363f;
+    --text: #e6e8ee; --muted: #9aa0ad; --accent: #4ea1ff; --accent-dim: #2b6fb8;
+    --warn: #ffb454; --bad: #ff7b7b; --good: #6ee7a0;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: grid; grid-template-columns: var(--left-w, 260px) minmax(0, 1fr) var(--right-w, 320px);
+    grid-template-rows: minmax(0, 1fr) auto;
+    font: 13px/1.5 "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
+    background: var(--bg); color: var(--text); overflow: hidden;
+  }
+  .panel { background: var(--panel); border-right: 1px solid var(--line); position: relative;
+           display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .panel.right { border-right: none; border-left: 1px solid var(--line); }
+  /* 拖曳調整側欄寬度（雙擊恢復預設） */
+  .resizer { position: absolute; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 6; }
+  .panel:not(.right) > .resizer { right: -5px; }
+  .panel.right > .resizer { left: -5px; }
+  .resizer:hover, .resizer.active { background: linear-gradient(to right, transparent 2px, var(--accent-dim) 2px 5px, transparent 5px); }
+  body.resizing, body.resizing * { cursor: col-resize !important; user-select: none; }
+  .panel h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+              color: var(--muted); margin: 0; padding: 10px 12px 6px; font-weight: 600; }
+
+  .files-head { display: flex; align-items: center; justify-content: space-between; }
+  .files-head button { font-size: 11px; padding: 2px 8px; text-transform: none; letter-spacing: 0; min-width: 0; }
+  .file .rm-row { float: right; color: var(--muted); visibility: hidden; padding: 0 2px; }
+  .file:hover .rm-row { visibility: visible; }
+  .file .rm-row:hover { color: var(--bad); }
+  .group .rm { float: right; cursor: pointer; color: var(--muted); padding: 0 4px; }
+  .group .rm:hover { color: var(--bad); }
+  #dropzone { position: fixed; inset: 0; z-index: 50; background: #0b1220cc; display: grid; place-items: center;
+              border: 3px dashed var(--accent); color: #fff; font-size: 22px; text-align: center; pointer-events: none; }
+  #dropzone span { font-size: 13px; color: var(--muted); }
+  #search { margin: 4px 10px 8px; padding: 6px 8px; border-radius: 5px;
+            border: 1px solid var(--line); background: var(--panel-2); color: var(--text); font: inherit; }
+  .filter { width: 100%; padding: 4px 7px; margin: 0 0 4px; border-radius: 5px; font: inherit;
+            border: 1px solid var(--line); background: var(--panel-2); color: var(--text); }
+  #search:focus, .filter:focus { outline: none; border-color: var(--accent); }
+  #files { flex: 1; overflow-y: auto; padding: 0 6px 10px; }
+  #noMatch { color: var(--muted); padding: 8px; font-size: 12px; }
+  .group { color: var(--muted); font-size: 11px; padding: 8px 6px 2px;
+           position: sticky; top: 0; background: var(--panel); word-break: break-all; }
+  .file { padding: 3px 8px; border-radius: 4px; cursor: pointer;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file:hover { background: var(--panel-2); }
+  .file.active { background: var(--accent-dim); color: #fff; }
+  .file .ext { color: var(--muted); font-size: 11px; }
+  .file.active .ext { color: #cfe3ff; }
+
+  #stage { position: relative; overflow: hidden; background: #101115; min-height: 0;
+           cursor: grab; }
+  #stage.dragging { cursor: grabbing; }
+  #stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #png { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+         max-width: none; box-shadow: 0 0 0 1px #000a; display: none; }
+  #empty { position: absolute; inset: 0; display: grid; place-items: center;
+           color: var(--muted); text-align: center; pointer-events: none; }
+  #badge { position: absolute; top: 10px; left: 12px; background: #000a; color: var(--muted);
+           padding: 4px 9px; border-radius: 5px; font-size: 11px; pointer-events: none; }
+  #hover { position: absolute; bottom: 10px; left: 12px; background: #000c; color: var(--text);
+           padding: 4px 9px; border-radius: 5px; font-size: 12px; pointer-events: none; }
+  #hover .dim { color: var(--muted); }
+  #spinner { position: absolute; top: 10px; right: 12px; width: 14px; height: 14px;
+             border: 2px solid var(--accent); border-right-color: transparent;
+             border-radius: 50%; animation: spin .7s linear infinite; display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #error { position: absolute; top: 40px; left: 12px; right: 12px; color: var(--bad);
+           background: #2a1416ee; border: 1px solid #5a2a2e; border-radius: 6px;
+           padding: 8px 12px; display: none; white-space: pre-wrap; z-index: 2; }
+  #error .x { float: right; cursor: pointer; color: var(--muted); padding: 0 2px 0 10px; }
+  #error .x:hover { color: var(--text); }
+  /* 換檔載入中：先把舊畫面調暗，免得誤以為已經是新檔 */
+  #stage.loading canvas, #stage.loading #png { opacity: .4; transition: opacity .12s; }
+
+  .tabs { display: flex; gap: 2px; padding: 8px 8px 0; border-bottom: 1px solid var(--line); }
+  .tab { padding: 5px 10px; border-radius: 5px 5px 0 0; cursor: pointer; color: var(--muted);
+         user-select: none; }
+  .tab.active { background: var(--panel-2); color: var(--text); }
+  .tabbody { flex: 1; overflow: auto; padding: 6px 8px 12px; font-size: 12px; display: none; }
+  .tabbody.active { display: block; }
+  .tabhead { position: sticky; top: -6px; z-index: 1; background: var(--panel);
+             margin: -6px -8px 4px; padding: 8px 8px 4px; border-bottom: 1px solid var(--line); }
+  .tabhead .stat { display: block; }
+  .row-item { padding: 2px 4px; border-radius: 3px; white-space: nowrap; display: flex;
+              align-items: center; gap: 4px; cursor: default; }
+  .row-item:hover { background: var(--panel-2); }
+  .row-item.sel { background: #2b4467; }
+  .row-item.off .nm { opacity: .42; }
+  .row-item .nm { overflow: hidden; text-overflow: ellipsis; }
+  .row-item .att { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .tag { font-size: 10px; padding: 0 5px; border-radius: 3px; background: #333846; color: #c9cdd8; }
+  .tag.add { background: #4a3a14; color: #ffd27a; }
+  .tag.mul { background: #213a4a; color: #8fd0ff; }
+  .tag.scr { background: #3a2147; color: #e3a6ff; }
+  .tag.st { background: #3b2c2c; color: #ffaaaa; }
+  .tag.clip { background: #3a1f3a; color: #ff9be8; }
+  .eye { width: 16px; text-align: center; cursor: pointer; color: var(--good); user-select: none; }
+  .eye.off { color: var(--bad); }
+  .toggle { display: inline-block; width: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+  .kids.collapsed { display: none; }
+  .info-table { border-collapse: collapse; width: 100%; }
+  .info-table td { padding: 2px 4px; vertical-align: top; border-bottom: 1px solid #262931; }
+  .info-table td:first-child { color: var(--muted); white-space: nowrap; width: 1%; }
+  .warnbox { color: var(--warn); margin: 6px 0; }
+  .badbox { color: var(--bad); margin: 6px 0; }
+  .ev { cursor: pointer; }
+  .open-props { color: var(--accent); cursor: pointer; font-size: 11px; margin-left: auto; padding-left: 6px; }
+  .prop-sec { margin: 10px 0 4px; color: var(--muted); font-size: 11px; letter-spacing: .06em;
+              border-bottom: 1px solid var(--line); padding-bottom: 2px; }
+  .prop-title { font-size: 14px; font-weight: 600; margin: 2px 0 2px; word-break: break-all; }
+  .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px;
+            margin-right: 4px; box-shadow: 0 0 0 1px #0008, inset 0 0 0 1px #fff3; position: relative;
+            overflow: hidden; background: repeating-conic-gradient(#999 0 25%, #666 0 50%) 0 0 / 6px 6px; }
+  .swatch i { position: absolute; inset: 0; }
+  .chip { display: inline-block; padding: 0 5px; margin: 1px 2px 1px 0; border-radius: 3px; background: #2a3242;
+          color: #cfe3ff; cursor: pointer; font-variant-numeric: tabular-nums; font-size: 11px; }
+  .chip:hover { background: var(--accent-dim); }
+  .chip.now { background: var(--accent-dim); color: #fff; }
+  .link { color: var(--accent); cursor: pointer; }
+  .regionimg { max-width: 100%; max-height: 180px; display: block; margin: 4px 0;
+               background: repeating-conic-gradient(#3a3d46 0 25%, #2b2e36 0 50%) 0 0 / 12px 12px;
+               box-shadow: 0 0 0 1px var(--line); }
+  .avail { padding: 1px 0; }
+  .avail.cur { color: var(--good); }
+
+  #controls { grid-column: 1 / -1; background: var(--panel); border-top: 1px solid var(--line);
+              padding: 8px 14px 9px; display: flex; flex-direction: column; gap: 7px; position: relative; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .sep { width: 1px; align-self: stretch; background: var(--line); margin: 2px 2px; }
+  .stepper { display: inline-flex; align-items: center; gap: 2px; }
+  button.icon { padding: 4px 7px; min-width: 26px; }
+  #frameInfo { min-width: 15.5em; white-space: pre; }
+  #status { flex: 1 1 160px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #buffer { position: absolute; left: 7px; right: 7px; bottom: -1px; height: 2px; border-radius: 1px;
+            pointer-events: none; }
+  #help { position: absolute; right: 14px; bottom: calc(100% + 6px); z-index: 40; background: var(--panel-2);
+          border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px 8px; font-size: 12px;
+          box-shadow: 0 10px 30px #000a; }
+  #help table { border-collapse: collapse; }
+  #help td { padding: 2px 12px 2px 0; vertical-align: top; }
+  #help td:first-child { white-space: nowrap; min-width: 8em; }
+  label.check:has(input:disabled) { opacity: .5; cursor: default; }
+  #help h3 { font-size: 11px; color: var(--muted); margin: 0 0 4px; font-weight: 600; letter-spacing: .06em; }
+  button, select, input[type=number] {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 5px; padding: 4px 10px; font: inherit; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent-dim); border-color: var(--accent); color: #fff; min-width: 76px; }
+  label.check { display: inline-flex; align-items: center; gap: 5px; color: var(--muted);
+                cursor: pointer; user-select: none; }
+  input[type=number] { width: 70px; }
+  #tlwrap { flex: 1; min-width: 220px; position: relative; padding-top: 7px; }
+  #timeline { width: 100%; accent-color: var(--accent); height: 20px; margin: 0; }
+  #marks { position: absolute; left: 7px; right: 7px; top: 0; height: 8px; }
+  .mark { position: absolute; width: 3px; height: 8px; background: var(--warn); border-radius: 1px;
+          transform: translateX(-1px); cursor: pointer; }
+  .stat { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .warn { color: var(--warn); }
+  kbd { background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 2px;
+        border-radius: 4px; padding: 0 5px; font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="panel">
+  <h2 class="files-head">骨架檔
+    <span>
+      <button id="openBtn" class="primary" title="只選一個 .skel（或 Spine 的 .json），圖集與貼圖直接從它所在的資料夾讀。讀的是原檔，重新匯出時會自動更新">📂 開啟</button>
+      <button id="uploadBtn" title="把檔案傳上來看：一次選 .skel、.atlas 與貼圖，或直接把檔案／資料夾拖進視窗">⬆ 上傳</button>
+    </span>
+  </h2>
+  <input type="file" id="uploadInput" multiple hidden
+         accept=".skel,.bytes,.json,.atlas,.txt,.png,.jpg,.jpeg,.webp">
+  <input id="search" placeholder="篩選檔名，或貼上 .skel 路徑按 Enter" autocomplete="off"
+         title="輸入文字篩選檔名；貼上完整路徑按 Enter 直接開啟。↑↓ 切換上一個／下一個檔案">
+  <div id="files"></div>
+  <div class="resizer" id="leftResizer" title="拖曳調整寬度，雙擊恢復"></div>
+</div>
+
+<div id="stage">
+  <canvas id="gl"></canvas>
+  <canvas id="overlay"></canvas>
+  <img id="png" alt="">
+  <div id="empty">從左側選一個 .skel / .json（<kbd>↑</kbd><kbd>↓</kbd> 可以逐一切換）<br>或按「📂 開啟」只選 .skel（圖集與貼圖從同一個資料夾讀）<br>也可以把 Spine 檔案拖進來上傳</div>
+  <div id="badge" hidden></div>
+  <div id="hover" hidden></div>
+  <div id="spinner"></div>
+  <div id="error"><span class="x" id="errorClose" title="關閉（Esc）">✕</span><span id="errorText"></span></div>
+</div>
+
+<div id="dropzone" hidden><div>放開以上傳<br><span>.skel／.json、.atlas、貼圖，或整個資料夾</span></div></div>
+
+<div class="panel right">
+  <div class="tabs">
+    <div class="tab active" data-tab="slots">插槽</div>
+    <div class="tab" data-tab="props">屬性</div>
+    <div class="tab" data-tab="bones">骨骼</div>
+    <div class="tab" data-tab="events">事件</div>
+    <div class="tab" data-tab="info">資訊</div>
+  </div>
+  <div class="tabbody active" id="tab-slots">
+    <div class="tabhead">
+      <input class="filter" id="slotFilter" placeholder="篩選插槽或附件名稱" autocomplete="off"
+             title="插槽名稱或目前的附件名稱包含這段文字就列出（篩選時也列出這一格沒有附件的插槽）">
+      <span class="stat" title="照繪製順序排，最上面的最後畫（蓋在最上層）">上＝最上層 · 點 ● 隱藏 · <kbd>Alt</kbd>+點＝只看它</span>
+      <label class="check"><input type="checkbox" id="onlyUsed" checked> 隱藏這一格沒有附件的插槽<span id="skipCount"></span></label>
+    </div>
+    <div id="slotList"></div>
+  </div>
+  <div class="tabbody" id="tab-props"></div>
+  <div class="tabbody" id="tab-bones">
+    <div class="tabhead">
+      <input class="filter" id="boneFilter" placeholder="篩選骨骼名稱" autocomplete="off">
+      <span id="boneDetail" class="stat">點骨骼可在畫面上標出位置</span>
+    </div>
+    <div id="boneList"></div>
+  </div>
+  <div class="tabbody" id="tab-events"></div>
+  <div class="tabbody" id="tab-info"></div>
+  <div class="resizer" id="rightResizer" title="拖曳調整寬度，雙擊恢復"></div>
+</div>
+
+<div id="controls">
+  <div class="row">
+    <button id="play" class="primary" disabled title="播放／暫停（空白鍵）">▶ 播放</button>
+    <select id="anim" disabled title="動畫（[ 與 ] 切換上一段／下一段）"></select>
+    <select id="skin" disabled title="造型（skin）"></select>
+    <div id="tlwrap"><div id="marks"></div>
+      <input type="range" id="timeline" min="0" max="0" value="0" step="1" disabled>
+      <div id="buffer" title="已載入的影格"></div></div>
+    <span class="stepper">
+      <button id="prevFrame" class="icon" disabled title="上一格（←；Shift+← 一次 10 格）">‹</button>
+      <input type="number" id="frameNum" value="0" min="0" step="1" disabled title="跳到第幾格">
+      <button id="nextFrame" class="icon" disabled title="下一格（→；Shift+→ 一次 10 格）">›</button>
+    </span>
+    <span class="stat" id="frameInfo">—</span>
+    <label class="check" title="播到最後一格後從頭再播"><input type="checkbox" id="loop" checked> 循環</label>
+    <select id="speed" title="播放速度">
+      <option value="0.1">0.1x</option>
+      <option value="0.25">0.25x</option>
+      <option value="0.5">0.5x</option>
+      <option value="1" selected>1x</option>
+      <option value="2">2x</option>
+    </select>
+  </div>
+  <div class="row">
+    <label class="check" title="畫出骨骼與世界原點（紅色十字＝遊戲裡節點的位置）。快捷鍵 B">
+      <input type="checkbox" id="showBones"> 骨骼</label>
+    <label class="check" title="畫出每個插槽的外框與名稱"><input type="checkbox" id="showBoxes"> 插槽外框</label>
+    <label class="check" title="套用 dark color（two color tint）。遊戲引擎預設關閉"><input type="checkbox" id="tint"> Tint black</label>
+    <label class="check" title="改用伺服器端 numpy 渲染器（與 CLI 的 render 同一份程式）畫的 PNG，用來對照">
+      <input type="checkbox" id="pngMode"> 伺服器渲染</label>
+    <button id="visReset" disabled title="顯示所有被隱藏的插槽">重設可視</button>
+    <label class="check">背景
+      <select id="bg">
+        <option value="checker">格子</option>
+        <option value="none">透明</option>
+        <option value="#000000">黑</option>
+        <option value="#ffffff">白</option>
+        <option value="#808080">灰</option>
+        <option value="#ff00ff">洋紅</option>
+      </select></label>
+    <label class="check">縮放
+      <select id="zoom" title="F 或 0＝適合，1＝100%；也可以用滾輪">
+        <option value="fit">適合</option>
+        <option value="0.25">25%</option>
+        <option value="0.5">50%</option>
+        <option value="1">100%</option>
+        <option value="2">200%</option>
+        <option value="4">400%</option>
+      </select></label>
+    <span class="sep"></span>
+    <label class="check" title="檔案被改動時自動重新載入（骨架、圖集、貼圖任一個）">
+      <input type="checkbox" id="autoReload" checked> 自動更新</label>
+    <button id="reloadNow" title="重新讀取骨架、圖集與貼圖">重新整理</button>
+    <button id="savePng" disabled title="把目前這一格存成 PNG：透明背景、原尺寸（1x），和 CLI 的 render 同一份程式畫的；隱藏的插槽不會畫">💾 存成 PNG</button>
+    <span class="stat" id="reloadFlash" hidden></span>
+    <span class="stat" id="status"></span>
+    <button id="helpBtn" title="快捷鍵與滑鼠操作（?）">⌨ 快捷鍵</button>
+  </div>
+  <div id="help" hidden>
+    <h3>鍵盤</h3>
+    <table>
+      <tr><td><kbd>空白鍵</kbd></td><td>播放／暫停</td></tr>
+      <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>上一格／下一格（按住 Shift 一次 10 格）</td></tr>
+      <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>第一格／最後一格</td></tr>
+      <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>上一個／下一個骨架檔（照左側列表，含篩選）</td></tr>
+      <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>上一段／下一段動畫（播放中會繼續播）</td></tr>
+      <tr><td><kbd>F</kbd> 或 <kbd>0</kbd></td><td>縮放到適合</td></tr>
+      <tr><td><kbd>1</kbd></td><td>縮放 100%</td></tr>
+      <tr><td><kbd>B</kbd></td><td>顯示／隱藏骨骼</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>關閉訊息、取消選取；在篩選框裡先清空再離開</td></tr>
+      <tr><td><kbd>?</kbd></td><td>開關這個說明</td></tr>
+    </table>
+    <h3 style="margin-top:8px">滑鼠</h3>
+    <table>
+      <tr><td>滾輪</td><td>以游標為中心縮放</td></tr>
+      <tr><td>拖曳</td><td>平移畫面</td></tr>
+      <tr><td>點附件</td><td>選取並打開「屬性」</td></tr>
+      <tr><td><kbd>Alt</kbd>+點眼睛</td><td>只看這個插槽（再按一次恢復）</td></tr>
+      <tr><td>拖側欄邊緣</td><td>調整寬度（雙擊恢復）</td></tr>
+    </table>
+  </div>
+</div>
+
+<script>
+"use strict";
+const el = (id) => document.getElementById(id);
+const escapeHTML = (s) => String(s ?? "").replace(/[&<>"]/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const BLEND_NAMES = ["normal", "additive", "multiply", "screen"];
+
+const state = {
+  file: null, info: null, meshes: [], textures: [], anim: "", skin: "",
+  last: 0, frame: 0, playing: false, playTime: 0,
+  frames: new Map(), pending: new Set(), viewport: null, gen: 0,
+  hidden: new Set(),          // 被隱藏的插槽索引
+  selSlot: -1, selBone: -1, hoverSlot: -1,
+  cam: { x: 0, y: 0, scale: 1, fit: true },
+  watchTimer: null, watchEvery: 0, pendingStamp: null, pendingSince: 0,
+  lastPanelUpdate: 0,
+  clipSlots: new Set(),       // clipping 插槽的索引（隱藏它們要交給伺服器，見 serverHide）
+  loadingName: null,          // 正在換過去的檔名（badge 顯示「載入中」）
+  failed: null,               // 目前的檔案讀不進來時 { stamp }：繼續盯著它，修好後自動重新載入
+  lastInfo: null,             // 讀不進來之前最後一次顯示的 info（修好重載時，用名稱接回隱藏與選取的插槽）
+  duration: 0,                // 目前動畫的長度（秒）
+  leftW: 260, rightW: 320,    // 側欄寬度（可拖曳，存在 localStorage）
+};
+
+// ================================================================ 檔案列表
+let filesSeq = 0;
+async function loadFiles(fresh) {
+  const seq = ++filesSeq;
+  const data = await fetch("/api/files" + (fresh ? "?fresh=1" : "")).then(r => r.json());
+  // 好幾次同時在跑（每 20 秒的更新、上傳或刪除後的立即更新）：只畫最後發出的那次，舊清單不能後到先蓋
+  if (seq !== filesSeq) return data.files;
+  // 分組鍵要含上傳 id：同一秒內的兩次上傳標題一樣，只用標題分組會被併成一組，按 ✕ 只刪得掉其中一次
+  const groups = new Map();
+  for (const f of data.files) {
+    const key = (f.upload || "") + "|" + f.dir;
+    if (!groups.has(key)) groups.set(key, [f.dir, []]);
+    groups.get(key)[1].push(f);
+  }
+  const byDir = [...groups.values()];
+  const box = el("files");
+  box.innerHTML = "";
+  for (const [dir, items] of byDir) {
+    const head = document.createElement("div");
+    head.className = "group";
+    head.textContent = dir === "." ? "(根目錄)" : dir;
+    if (items[0].upload) {
+      const rm = document.createElement("span");
+      rm.className = "rm"; rm.textContent = "✕"; rm.title = "刪除這次上傳的檔案";
+      rm.onclick = (e) => { e.stopPropagation(); removeUpload(items[0].upload); };
+      head.appendChild(rm);
+    }
+    box.appendChild(head);
+    for (const f of items) {
+      const row = document.createElement("div");
+      row.className = "file" + (f.path === state.file ? " active" : "");
+      const dot = f.name.lastIndexOf(".");
+      row.innerHTML = `${escapeHTML(f.name.slice(0, dot))}<span class="ext">${escapeHTML(f.name.slice(dot))}</span>`;
+      row.title = f.title || f.path;
+      row.dataset.path = f.path;
+      if (f.opened) {
+        const rm = document.createElement("span");
+        rm.className = "rm-row"; rm.textContent = "✕"; rm.title = "從「最近開啟」移除（不會刪檔案）";
+        rm.onclick = (e) => { e.stopPropagation(); removeOpened(f.opened); };
+        row.prepend(rm);
+      }
+      row.onclick = () => selectFile(f.path);
+      box.appendChild(row);
+    }
+  }
+  applyFilter();
+  if (!state.file) el("status").textContent = data.root
+    ? `${data.files.length} 個骨架檔` : "沒有開啟資料夾——按「📂 開啟」選 .skel，或把 Spine 檔案拖進來";
+  return data.files;
+}
+function applyFilter() {
+  let needle = (el("search").value || "").toLowerCase();
+  if (/^([a-z]:[\\/]|\\\\|\/)/.test(needle.trim().replace(/^["']/, ""))) needle = "";
+  // 整組都沒有符合的檔案時連標題一起藏起來
+  let head = null, headShown = false, shown = 0, total = 0;
+  const closeGroup = () => { if (head) head.style.display = headShown ? "" : "none"; };
+  for (const node of el("files").children) {
+    if (node.classList.contains("group")) { closeGroup(); head = node; headShown = false; continue; }
+    if (!node.classList.contains("file")) continue;
+    total++;
+    const ok = !needle || node.dataset.path.toLowerCase().includes(needle);
+    node.style.display = ok ? "" : "none";
+    if (ok) { shown++; headShown = true; }
+  }
+  closeGroup();
+  let msg = el("noMatch");
+  if (total && !shown) {
+    if (!msg) { msg = document.createElement("div"); msg.id = "noMatch"; el("files").appendChild(msg); }
+    msg.textContent = `沒有檔名包含「${el("search").value.trim()}」的骨架檔`;
+  } else if (msg) msg.remove();
+}
+el("search").oninput = applyFilter;
+
+// ================================================================ WebGL
+const glCanvas = el("gl"), ovCanvas = el("overlay"), ov = ovCanvas.getContext("2d");
+const gl = glCanvas.getContext("webgl", { premultipliedAlpha: true, alpha: true, stencil: true,
+                                          antialias: true, preserveDrawingBuffer: true });
+function compile(vs, fs) {
+  const p = gl.createProgram();
+  for (const [type, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    gl.attachShader(p, s);
+  }
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+// 與 Cocos2d-x 的 two color tint shader 相同；u_useDark = 0 時就是一般的 texture * color
+const progMain = compile(`
+  attribute vec2 a_pos; attribute vec2 a_uv; uniform vec4 u_view; varying vec2 v_uv;
+  void main() { v_uv = a_uv; gl_Position = vec4(a_pos * u_view.xy + u_view.zw, 0.0, 1.0); }`, `
+  precision mediump float; varying vec2 v_uv; uniform sampler2D u_tex;
+  uniform vec4 u_color; uniform vec3 u_dark; uniform float u_useDark;
+  void main() {
+    vec4 t = texture2D(u_tex, v_uv);
+    if (u_useDark > 0.5) {
+      gl_FragColor = vec4((t.a - t.rgb) * u_dark + t.rgb * u_color.rgb, t.a * u_color.a);
+    } else {
+      gl_FragColor = t * u_color;
+    }
+  }`);
+const progFlat = compile(`
+  attribute vec2 a_pos; uniform vec4 u_view;
+  void main() { gl_Position = vec4(a_pos * u_view.xy + u_view.zw, 0.0, 1.0); }`, `
+  precision mediump float; void main() { gl_FragColor = vec4(1.0); }`);
+const progBg = compile(`
+  attribute vec2 a_pos; void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`, `
+  precision mediump float; uniform vec4 u_color; uniform float u_checker; uniform float u_cell;
+  void main() {
+    if (u_checker > 0.5) {
+      vec2 c = floor(gl_FragCoord.xy / u_cell);
+      float v = mod(c.x + c.y, 2.0) < 0.5 ? 0.30 : 0.22;
+      gl_FragColor = vec4(v, v, v + 0.015, 1.0);
+    } else { gl_FragColor = u_color; }
+  }`);
+const loc = {
+  pos: gl.getAttribLocation(progMain, "a_pos"), uv: gl.getAttribLocation(progMain, "a_uv"),
+  view: gl.getUniformLocation(progMain, "u_view"), tex: gl.getUniformLocation(progMain, "u_tex"),
+  color: gl.getUniformLocation(progMain, "u_color"), dark: gl.getUniformLocation(progMain, "u_dark"),
+  useDark: gl.getUniformLocation(progMain, "u_useDark"),
+  fpos: gl.getAttribLocation(progFlat, "a_pos"), fview: gl.getUniformLocation(progFlat, "u_view"),
+  bpos: gl.getAttribLocation(progBg, "a_pos"), bcolor: gl.getUniformLocation(progBg, "u_color"),
+  bchecker: gl.getUniformLocation(progBg, "u_checker"), bcell: gl.getUniformLocation(progBg, "u_cell"),
+};
+const posBuf = gl.createBuffer();
+const quadBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+
+// 混色函式照 Cocos2d-x SkeletonRenderer（貼圖為預乘 alpha 時）
+function setBlend(mode) {
+  if (mode === 1) gl.blendFunc(gl.ONE, gl.ONE);                              // additive
+  else if (mode === 2) gl.blendFunc(gl.DST_COLOR, gl.ONE_MINUS_SRC_ALPHA);   // multiply
+  else if (mode === 3) gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_COLOR);         // screen
+  else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);                         // normal
+}
+
+function b64bytes(s) {
+  const bin = atob(s); const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+const b64f32 = (s) => new Float32Array(b64bytes(s).buffer);
+const b64u16 = (s) => new Uint16Array(b64bytes(s).buffer);
+
+function resizeCanvases() {
+  const dpr = window.devicePixelRatio || 1;
+  const r = el("stage").getBoundingClientRect();
+  for (const c of [glCanvas, ovCanvas]) {
+    const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  }
+}
+
+function viewUniform() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = glCanvas.width / dpr, h = glCanvas.height / dpr, s = state.cam.scale;
+  const sx = 2 * s / w, sy = 2 * s / h;
+  return [sx, sy, -state.cam.x * sx, -state.cam.y * sy];
+}
+function worldToScreen(x, y) {      // overlay 畫布座標（裝置像素）
+  const dpr = window.devicePixelRatio || 1;
+  return [(glCanvas.width / dpr / 2 + (x - state.cam.x) * state.cam.scale) * dpr,
+          (glCanvas.height / dpr / 2 - (y - state.cam.y) * state.cam.scale) * dpr];
+}
+function screenToWorld(cx, cy) {    // CSS 像素
+  const dpr = window.devicePixelRatio || 1;
+  return [state.cam.x + (cx - glCanvas.width / dpr / 2) / state.cam.scale,
+          state.cam.y - (cy - glCanvas.height / dpr / 2) / state.cam.scale];
+}
+
+function fitCamera() {
+  const vp = state.viewport;
+  if (!vp) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = glCanvas.width / dpr, h = glCanvas.height / dpr, pad = 24;
+  const vw = Math.max(1, vp[2] - vp[0]), vh = Math.max(1, vp[3] - vp[1]);
+  state.cam.x = (vp[0] + vp[2]) / 2;
+  state.cam.y = (vp[1] + vp[3]) / 2;
+  state.cam.scale = Math.max(0.01, Math.min((w - pad * 2) / vw, (h - pad * 2) / vh));
+}
+function applyZoomSelect() {
+  const z = el("zoom").value;
+  state.cam.fit = z === "fit";
+  if (state.cam.fit) fitCamera();
+  else {
+    if (state.viewport) {
+      state.cam.x = (state.viewport[0] + state.viewport[2]) / 2;
+      state.cam.y = (state.viewport[1] + state.viewport[3]) / 2;
+    }
+    state.cam.scale = parseFloat(z);
+  }
+  redraw();
+}
+
+function drawBackground() {
+  const bg = el("bg").value;
+  gl.disable(gl.BLEND);
+  if (bg === "none") { gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); return; }
+  gl.useProgram(progBg);
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.enableVertexAttribArray(loc.bpos);
+  gl.vertexAttribPointer(loc.bpos, 2, gl.FLOAT, false, 0, 0);
+  gl.uniform1f(loc.bchecker, bg === "checker" ? 1 : 0);
+  gl.uniform1f(loc.bcell, 8 * (window.devicePixelRatio || 1));
+  const c = parseInt(bg.slice(1) || "000000", 16);
+  gl.uniform4f(loc.bcolor, ((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255, 1);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  gl.disableVertexAttribArray(loc.bpos);
+}
+
+function drawFrameGL(fr) {
+  resizeCanvases();
+  gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+  gl.disable(gl.STENCIL_TEST);
+  gl.clearStencil(0);
+  gl.clear(gl.STENCIL_BUFFER_BIT);
+  drawBackground();
+  if (!fr) return;
+  const view = viewUniform();
+  const tint = el("tint").checked;
+  gl.enable(gl.BLEND);
+  let currentClip = -1;
+  for (const d of fr.draws) {
+    if (state.hidden.has(d.slot)) continue;
+    const mesh = state.meshes[d.att];
+    if (!mesh || mesh.page < 0 || d.xy.length < mesh.vertices * 2) continue;
+    const tex = state.textures[mesh.page];
+    if (!tex) continue;
+    if (d.clip !== currentClip) {
+      if (d.clip < 0) gl.disable(gl.STENCIL_TEST);
+      else drawClipStencil(fr.clips[d.clip], view);
+      currentClip = d.clip;
+    }
+    gl.useProgram(progMain);
+    gl.uniform4fv(loc.view, view);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(loc.tex, 0);
+    gl.uniform4fv(loc.color, d.color);
+    const useDark = tint && d.dark;
+    gl.uniform1f(loc.useDark, useDark ? 1 : 0);
+    gl.uniform3fv(loc.dark, useDark ? d.dark : [0, 0, 0]);
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, d.xy, gl.STREAM_DRAW);
+    gl.enableVertexAttribArray(loc.pos);
+    gl.vertexAttribPointer(loc.pos, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, mesh.uvBuf);
+    gl.enableVertexAttribArray(loc.uv);
+    gl.vertexAttribPointer(loc.uv, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.idxBuf);
+    setBlend(d.blend);
+    gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
+  }
+  gl.disableVertexAttribArray(loc.pos);
+  gl.disableVertexAttribArray(loc.uv);
+  gl.disable(gl.STENCIL_TEST);
+}
+
+// clipping：多邊形用 TRIANGLE_FAN 畫進 stencil，INVERT 只動最低位元 = even-odd 填色，
+// 凹多邊形也不必先三角化
+function drawClipStencil(poly, view) {
+  gl.enable(gl.STENCIL_TEST);
+  gl.clear(gl.STENCIL_BUFFER_BIT);
+  gl.colorMask(false, false, false, false);
+  gl.stencilMask(1);
+  gl.stencilFunc(gl.ALWAYS, 1, 1);
+  gl.stencilOp(gl.KEEP, gl.KEEP, gl.INVERT);
+  gl.useProgram(progFlat);
+  gl.uniform4fv(loc.fview, view);
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, poly, gl.STREAM_DRAW);
+  gl.enableVertexAttribArray(loc.fpos);
+  gl.vertexAttribPointer(loc.fpos, 2, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLE_FAN, 0, poly.length / 2);
+  gl.disableVertexAttribArray(loc.fpos);
+  gl.colorMask(true, true, true, true);
+  gl.stencilFunc(gl.EQUAL, 1, 1);
+  gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+}
+
+// ================================================================ 疊圖（骨骼、外框、選取）
+function drawOverlay(fr) {
+  ov.setTransform(1, 0, 0, 1, 0, 0);
+  ov.clearRect(0, 0, ovCanvas.width, ovCanvas.height);
+  if (!fr || el("pngMode").checked) return;
+  const dpr = window.devicePixelRatio || 1;
+  ov.lineWidth = 1 * dpr;
+  ov.font = `${11 * dpr}px "Segoe UI", "Microsoft JhengHei", sans-serif`;
+  const boxes = el("showBoxes").checked;
+  for (const d of fr.draws) {
+    const sel = d.slot === state.selSlot, hov = d.slot === state.hoverSlot;
+    if (!(boxes || sel || hov) || state.hidden.has(d.slot)) continue;
+    const b = d.bbox;
+    const [x0, y0] = worldToScreen(b[0], b[3]), [x1, y1] = worldToScreen(b[2], b[1]);
+    const mesh = state.meshes[d.att];
+    if ((sel || hov) && mesh) {      // mesh 不在：重新載入途中，新的附件表已換上、影格還是舊的
+      ov.strokeStyle = sel ? "rgba(78,161,255,.95)" : "rgba(255,255,255,.65)";
+      ov.beginPath();
+      for (let i = 0; i < mesh.tri.length; i += 3) {
+        for (let k = 0; k < 3; k++) {
+          const v = mesh.tri[i + k];
+          const [sx, sy] = worldToScreen(d.xy[v * 2], d.xy[v * 2 + 1]);
+          if (k === 0) ov.moveTo(sx, sy); else ov.lineTo(sx, sy);
+        }
+        ov.closePath();
+      }
+      ov.stroke();
+    }
+    if (boxes || sel) {
+      ov.strokeStyle = sel ? "rgba(78,161,255,.95)" : "rgba(255,210,60,.8)";
+      ov.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      ov.fillStyle = ov.strokeStyle;
+      ov.fillText(state.info.slots[d.slot].name, x0 + 2 * dpr, y0 + 11 * dpr);
+    }
+  }
+  if (el("showBones").checked || state.selBone >= 0) {
+    fr.bones.forEach((b, i) => {
+      if (!b[4]) return;
+      const only = !el("showBones").checked;
+      if (only && i !== state.selBone) return;
+      const [sx, sy] = worldToScreen(b[0], b[1]), [ex, ey] = worldToScreen(b[2], b[3]);
+      const sel = i === state.selBone;
+      ov.strokeStyle = sel ? "rgba(255,120,60,1)" : "rgba(80,200,255,.9)";
+      ov.lineWidth = (sel ? 3 : 2) * dpr;
+      if (Math.hypot(ex - sx, ey - sy) > 1) {
+        ov.beginPath(); ov.moveTo(sx, sy); ov.lineTo(ex, ey); ov.stroke();
+      }
+      ov.fillStyle = sel ? "#ff7840" : "#fff";
+      ov.beginPath(); ov.arc(sx, sy, (sel ? 4 : 2.5) * dpr, 0, Math.PI * 2); ov.fill();
+    });
+    ov.lineWidth = 1 * dpr;
+    const [ox, oy] = worldToScreen(0, 0);
+    ov.strokeStyle = "rgba(255,90,90,.9)";
+    ov.beginPath(); ov.moveTo(ox - 9 * dpr, oy); ov.lineTo(ox + 9 * dpr, oy);
+    ov.moveTo(ox, oy - 9 * dpr); ov.lineTo(ox, oy + 9 * dpr); ov.stroke();
+  }
+}
+
+// ================================================================ 載入
+
+// 網址的 # 可以帶 file / anim / skin / frame（也接受只有檔案路徑的舊寫法），方便分享特定畫面
+function readHash() {
+  const raw = location.hash.slice(1);
+  if (!raw) return {};
+  if (!raw.includes("=")) return { file: decodeURIComponent(raw) };
+  const out = {};
+  for (const [k, v] of new URLSearchParams(raw)) out[k] = v;
+  return out;
+}
+function writeHash() {
+  if (!state.file) return;
+  const q = new URLSearchParams({ file: state.file });
+  if (state.anim) q.set("anim", state.anim);
+  if (state.skin) q.set("skin", state.skin);
+  if (state.frame) q.set("frame", String(state.frame));
+  history.replaceState(null, "", "#" + q.toString());
+}
+function showError(msg) {
+  el("errorText").textContent = msg || "";
+  el("error").style.display = msg ? "block" : "none";
+}
+el("errorClose").onclick = () => showError("");
+
+const baseName = (p) => String(p || "").split(/[\\/]/).pop();
+// 畫面上的骨架就是 state.file 那一個（不是換檔途中：那時 state.file 已經是新檔，info、動畫、影格還是舊檔的）。
+// 會拿 state.file 配 state.anim／影格去問伺服器的地方都要先確認，免得送出「新檔 + 舊檔的動畫」這種混搭請求
+const ready = () => !!state.info && state.info.file === state.file;
+const SWITCH_CONTROLS = ["play", "anim", "skin", "timeline", "frameNum", "prevFrame", "nextFrame", "savePng", "visReset"];
+function setLoading(name) {
+  state.loadingName = name;
+  el("stage").classList.toggle("loading", !!name);
+  updateBadge();
+}
+
+// 目前沒有骨架可以顯示（讀不進來、上傳被刪掉）：清掉畫面與面板、停用播放相關的控制項。
+// 動畫與造型選單只停用、不清空——檔案修好後重新載入時要靠它們接回原本的動畫與造型
+function clearView() {
+  stopPlay();
+  if (state.info) state.lastInfo = state.info;
+  state.info = null; state.frames.clear(); state.pending.clear(); state.viewport = null; state.last = 0;
+  detailReq++; clearTimeout(detailTimer);       // 還在路上的屬性回應不能再畫回來
+  setLoading(null);
+  for (const id of SWITCH_CONTROLS) el(id).disabled = true;
+  el("frameInfo").textContent = "—";
+  el("marks").innerHTML = "";
+  el("slotList").innerHTML = ""; el("skipCount").textContent = "";
+  renderBonesTab();
+  el("boneDetail").textContent = "點骨骼可在畫面上標出位置";
+  el("tab-events").innerHTML = ""; el("tab-info").innerHTML = "";
+  document.querySelector('.tab[data-tab="info"]').textContent = "資訊";
+  el("hover").hidden = true;
+  el("spinner").style.display = "none";
+  renderSlotDetail(null);
+  redraw();
+}
+
+async function selectFile(path, keepView) {
+  stopPlay();
+  // 讀不進來之後的重試：錯誤訊息留到有結果再換，不要每 1.5 秒閃一次
+  if (!(keepView && state.failed)) showError("");
+  // 方向鍵連跳還沒載入的那一個作廢：使用者已經直接點了別的檔案
+  clearTimeout(stepTimer); stepTarget = null;
+  if (path !== state.file) { state.failed = null; state.lastInfo = null; }
+  // 網址帶的動畫／造型／格數只給網址指定的那個檔案用
+  if (state.wanted && state.wanted.file !== path) state.wanted = null;
+  // 換到別的檔案：載入完成前停用播放、動畫、時間軸等（這段時間的操作會拿舊檔的動畫配新檔）
+  if (state.info && state.info.file !== path) for (const id of SWITCH_CONTROLS) el(id).disabled = true;
+  state.file = path;
+  try { localStorage.setItem("spineview.file", path); } catch {}
+  document.querySelectorAll("#files .file").forEach(n =>
+    n.classList.toggle("active", n.dataset.path === path));
+  if (!keepView) {
+    state.hidden.clear(); state.selSlot = -1; state.selBone = -1;
+    el("visReset").disabled = true; el("visReset").textContent = "重設可視";
+  }
+  const gen = ++state.gen;
+  detailReq++;                         // 上一個檔案還在路上的屬性回應一律作廢
+  if (!keepView) { renderSlotDetail(null); setLoading(baseName(path)); }
+  el("spinner").style.display = "block";
+  let info;
+  // info → meshes／貼圖之間檔案若被換掉，版本會對不上（伺服器回 409）；重抓 info 再來一次
+  for (let attempt = 0; ; attempt++) {
+    try {
+      info = await fetch("/api/info?file=" + encodeURIComponent(path)).then(r => r.json());
+    } catch (e) { info = { error: String(e) }; }
+    if (gen !== state.gen) return false;
+    if (info.error) {
+      showError("讀不進來：" + info.error);
+      clearView();
+      el("status").textContent = el("status").title = "讀不進來：" + baseName(path);
+      // 繼續盯著這個檔案，修好（例如改用 3.8 重新匯出）後自動重新載入：
+      // 有指紋（內容讀不懂）→ 指紋變了才重試；沒有指紋（檔案暫時不見、被別的程式鎖住）→ 查得到就再試
+      state.failed = { stamp: info.stamp ? info.stamp + "-" + info.boot : null };
+      startWatching();
+      return false;
+    }
+    const loaded = await loadAssets(info, gen);
+    if (gen !== state.gen) return false;
+    if (loaded === "ok" || attempt >= 2) break;
+  }
+  // 重新載入同一個檔案：插槽／骨骼可能增減或換了順序（美術重新匯出），隱藏與選取改用名稱接回去，
+  // 不然索引會指到別的插槽，甚至超出範圍
+  const prev = keepView ? (state.info || state.lastInfo) : null;
+  if (prev && prev !== info && prev.file === path) remapSelection(prev, info);
+  state.info = info;
+  state.failed = null; state.lastInfo = null;
+  showError("");
+  // 哪些插槽是 clipping 遮罩，info 一開始就講了（不必等影格裡出現過才知道），隱藏它們時才會正確交給伺服器
+  state.clipSlots = new Set(info.slots.flatMap((s, i) => s.clip ? [i] : []));
+  setLoading(null);
+  el("savePng").disabled = false;
+  updateVisReset();
+
+  const keepAnim = keepView ? el("anim").value : null, keepSkin = keepView ? el("skin").value : null;
+  const animSel = el("anim");
+  animSel.innerHTML = "";
+  const setup = document.createElement("option");
+  setup.value = ""; setup.textContent = "(setup pose)";
+  animSel.appendChild(setup);
+  for (const a of info.animations) {
+    const o = document.createElement("option");
+    o.value = a.name; o.textContent = `${a.name}  (${a.duration.toFixed(2)}s)`;
+    animSel.appendChild(o);
+  }
+  const wanted = state.wanted || {};
+  animSel.value = keepAnim !== null && info.animations.some(a => a.name === keepAnim) ? keepAnim
+    : (wanted.anim !== undefined && (wanted.anim === "" || info.animations.some(a => a.name === wanted.anim))
+       ? wanted.anim : (info.animations[0] ? info.animations[0].name : ""));
+  animSel.disabled = false;
+
+  const skinSel = el("skin");
+  skinSel.innerHTML = "";
+  for (const s of info.skins) {
+    const o = document.createElement("option");
+    o.value = s; o.textContent = "造型: " + s;
+    skinSel.appendChild(o);
+  }
+  if (!info.skins.length) {
+    const o = document.createElement("option"); o.value = ""; o.textContent = "（無造型）";
+    skinSel.appendChild(o);
+  }
+  skinSel.value = keepSkin !== null && info.skins.includes(keepSkin) ? keepSkin
+    : (wanted.skin && info.skins.includes(wanted.skin) ? wanted.skin
+       : (info.defaultSkin || (info.skins.includes("default") ? "default" : (info.skins[0] || ""))));
+  skinSel.disabled = info.skins.length <= 1;
+
+  renderInfoTab();
+  renderBonesTab();
+  if (keepView && state.selSlot >= 0) loadSlotDetail();
+  if (wanted.frame) { state.frame = +wanted.frame || 0; applyAnim(true); state.camPending = true; }
+  else applyAnim(keepView);
+  state.wanted = null;
+  startWatching();
+  el("empty").hidden = true;
+  const c = info.constraints;
+  el("status").textContent = `${info.name} · Spine ${info.version} · ${info.bones.length} 骨骼 · ` +
+    `${info.slots.length} 插槽` + (c.ik + c.transform + c.path ? ` · 約束 ${c.ik}/${c.transform}/${c.path}` : "");
+  el("status").title = el("status").textContent;      // 窄視窗會被截斷，滑過看完整
+  return true;
+}
+
+async function loadAssets(info, gen) {
+  const v = encodeURIComponent(info.stamp + "-" + info.boot);
+  const file = encodeURIComponent(info.file);
+  const [meshData, images] = await Promise.all([
+    fetch(`/api/meshes?file=${file}&v=${v}`).then(r => r.json()).catch(e => ({ error: String(e) })),
+    Promise.all(info.pages.map(p => new Promise(resolve => {
+      if (!p.exists) return resolve(null);
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = `/api/texture?file=${file}&page=${p.index}&v=${v}`;
+    }))),
+  ]);
+  if (gen !== state.gen) return "cancelled";
+  // 版本對不上（409）：載入途中檔案被換掉，交給 selectFile 重抓。
+  // 貼圖讀不出來不算——瀏覽器解不開的格式（.ktx、壞掉的 PNG）重抓幾次都一樣，只會白白多載入兩輪；
+  // 真的是途中換檔的話，自動更新之後也會發現指紋變了
+  const stale = meshData.stale || meshData.error || meshData.stamp !== info.stamp;
+  for (const m of state.meshes) { if (m) { gl.deleteBuffer(m.uvBuf); gl.deleteBuffer(m.idxBuf); } }
+  for (const t of state.textures) if (t) gl.deleteTexture(t);
+  state.textures = images.map((img, i) => {
+    if (!img) return null;
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    // Cocos2d-x 載入 PNG 時預乘 alpha；圖集標了 pma 的貼圖本身已預乘
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, !info.pages[i].pma);
+    // 不做色彩描述檔（iCCP／gAMA）轉換：遊戲引擎與伺服器渲染器都直接用 PNG 裡的數值
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return t;
+  });
+  state.meshes = [];
+  for (const a of meshData.attachments || []) {
+    const uv = b64f32(a.uv), tri = b64u16(a.tri);
+    const uvBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, uv, gl.STATIC_DRAW);
+    const idxBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, tri, gl.STATIC_DRAW);
+    state.meshes[a.id] = { name: a.name, page: a.page, uvBuf, idxBuf, count: tri.length, tri,
+                           vertices: uv.length / 2 };
+  }
+  return stale ? "stale" : "ok";
+}
+
+function applyAnim(keepFrame) {
+  const info = state.info;
+  state.anim = el("anim").value;
+  state.skin = el("skin").value;
+  const a = info.animations.find(x => x.name === state.anim);
+  state.last = a ? a.frames - 1 : 0;
+  state.duration = a ? a.duration : 0;
+  state.frames.clear();
+  state.pending.clear();
+  state.viewport = null;
+  const bar = el("timeline");
+  bar.max = state.last; bar.disabled = false;
+  el("frameNum").max = state.last; el("frameNum").disabled = false;
+  el("play").disabled = state.last <= 0;
+  el("prevFrame").disabled = el("nextFrame").disabled = state.last <= 0;
+  renderMarks(a);
+  renderEventsTab(a);
+  const target = keepFrame ? Math.min(state.frame, state.last) : 0;
+  state.frame = target;
+  state.camPending = !keepFrame || state.cam.fit;
+  setFrame(target);
+  prefetch();
+}
+
+function framesKey() { return [state.gen, state.anim, state.skin, serverHide()].join("|"); }
+function serverHide() {
+  // 被隱藏的 clipping 插槽要交給伺服器處理（會影響其他插槽的裁切）；其餘插槽前端直接略過
+  if (!state.info) return "";
+  const names = [];
+  for (const i of state.hidden) if (state.clipSlots && state.clipSlots.has(i)) names.push(state.info.slots[i].name);
+  return names.join("|");
+}
+
+async function fetchChunk(start) {
+  if (!ready()) return;                  // 沒有骨架（讀不進來、上傳被刪）或正在換檔：沒有東西可抓
+  const end = Math.min(state.last, start + 19);
+  const key = framesKey();
+  const tag = key + "#" + start;
+  if (state.pending.has(tag)) return;
+  state.pending.add(tag);
+  const q = new URLSearchParams({ file: state.file, anim: state.anim, skin: state.skin,
+                                  frames: `${start}-${end}`, hide: serverHide(),
+                                  v: state.info.stamp + "-" + state.info.boot });
+  try {
+    const data = await fetch("/api/poses?" + q).then(r => r.json());
+    if (key !== framesKey()) return;
+    if (data.error) { showError(data.error); return; }
+    // 附件 id 對應的是 info／meshes 那個版本；版本不同時 id 可能指到別的附件
+    if (data.stamp !== state.info.stamp) { reloadCurrentFile(); return; }
+    if (data.viewport && !state.viewport) {
+      state.viewport = data.viewport;
+      if (state.camPending) {
+        // 換檔、換動畫後重新取景：縮放選單也要跟著回到「適合」，不然選單寫 200% 實際卻不是
+        fitCamera(); state.camPending = false;
+        state.cam.fit = true; el("zoom").value = "fit";
+      } else if (state.cam.fit) fitCamera();
+    }
+    for (const fr of data.frames) state.frames.set(fr.frame, decodeFrame(fr, data.states));
+    if (!state.playing && state.frames.has(state.frame)) redraw();
+  } catch (e) {
+    showError("影格載入失敗：" + e);
+  } finally {
+    state.pending.delete(tag);
+  }
+}
+
+function decodeFrame(fr, states) {
+  const draws = fr.draws.map(d => {
+    const xy = b64f32(d[6]);
+    let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+    for (let i = 0; i < xy.length; i += 2) {
+      const x = xy[i], y = xy[i + 1];
+      if (x < minx) minx = x; if (x > maxx) maxx = x;
+      if (y < miny) miny = y; if (y > maxy) maxy = y;
+    }
+    return { att: d[0], slot: d[1], blend: d[2], color: d[3], dark: d[4], clip: d[5], xy,
+             bbox: [minx, miny, maxx, maxy] };
+  });
+  const slots = fr.slots.map(s => ({ index: s[0], attachment: s[1], state: states[s[2]] }));
+  // 骨骼：float32 [x, y, 末端x, 末端y] × 骨骼數；展開成 [x, y, ex, ey, 是否啟用]
+  const raw = b64f32(fr.bones), off = new Set(fr.inactiveBones || []), bones = [];
+  for (let i = 0; i < raw.length / 4; i++) {
+    bones.push([raw[i * 4], raw[i * 4 + 1], raw[i * 4 + 2], raw[i * 4 + 3], off.has(i) ? 0 : 1]);
+  }
+  return { frame: fr.frame, time: fr.time, draws, clips: fr.clips.map(b64f32),
+           bones, slots, events: fr.events };
+}
+
+function prefetch() {
+  if (!state.info) return;
+  // 從目前位置往後抓，抓完再繞回開頭；同時最多 3 個請求
+  const order = [];
+  for (let s = Math.floor(state.frame / 20) * 20; s <= state.last; s += 20) order.push(s);
+  for (let s = 0; s < Math.floor(state.frame / 20) * 20; s += 20) order.push(s);
+  const key = framesKey();
+  let i = 0;
+  const pump = async () => {
+    while (i < order.length && key === framesKey()) {
+      const s = order[i++];
+      let have = true;
+      for (let f = s; f <= Math.min(state.last, s + 19); f++) if (!state.frames.has(f)) { have = false; break; }
+      if (have) continue;
+      await fetchChunk(s);
+    }
+  };
+  for (let k = 0; k < 3; k++) pump();
+}
+
+// ================================================================ 影格顯示
+function setFrame(frame) {
+  frame = Math.max(0, Math.min(state.last, Math.round(frame)));
+  state.frame = frame;
+  el("timeline").value = frame;
+  el("frameNum").value = frame;
+  const fps = state.info ? state.info.fps : 30;
+  const total = state.last / fps;
+  el("frameInfo").textContent = `${frame} / ${state.last}   ${(frame / fps).toFixed(3)}s / ${total.toFixed(3)}s`;
+  scheduleSlotDetail();
+  if (!state.playing) writeHash();
+  if (ready() && !state.frames.has(frame)) {
+    el("spinner").style.display = "block";
+    fetchChunk(Math.floor(frame / 20) * 20);
+  }
+  redraw();
+}
+
+function currentFrame() {
+  if (state.frames.has(state.frame)) return state.frames.get(state.frame);
+  // 還沒載到就先顯示最近一格已有的，避免畫面閃爍
+  for (let d = 1; d <= state.last; d++) {
+    if (state.frames.has(state.frame - d)) return state.frames.get(state.frame - d);
+    if (state.frames.has(state.frame + d)) return state.frames.get(state.frame + d);
+  }
+  return null;
+}
+
+function redraw() {
+  const fr = state.info ? currentFrame() : null;
+  if (fr && fr.frame === state.frame) el("spinner").style.display = "none";
+  if (el("pngMode").checked && state.info) {
+    showPng();
+    drawFrameGL(null);
+  } else {
+    el("png").style.display = "none";
+    drawFrameGL(fr);
+  }
+  drawOverlay(fr);
+  updateBadge();
+  renderBuffer();
+  const now = performance.now();
+  if (fr && (!state.playing || now - state.lastPanelUpdate > 300)) {
+    state.lastPanelUpdate = now;
+    renderSlotsTab(fr);
+    updateBoneDetail(fr);
+  }
+  if (fr && fr.events.length && state.playing) {
+    flashStatus("事件：" + fr.events.map(e => e.name).join(", "));
+  }
+}
+
+// 時間軸下方的細條：已經從伺服器拿到的影格（像影片的緩衝條），播放剛開始卡頓時看得出原因
+let bufferSig = "";
+function renderBuffer() {
+  const box = el("buffer");
+  const sig = state.info ? `${framesKey()}|${state.last}|${state.frames.size}` : "";
+  if (sig === bufferSig) return;
+  bufferSig = sig;
+  if (!state.info || state.last <= 0) { box.style.background = "none"; return; }
+  const on = "#4ea1ffaa", off = "#ffffff14", n = state.last + 1, stops = [];
+  // 第 f 格在滑桿上的位置是 f / last；每一格佔它前後各半格
+  const at = (f) => Math.max(0, Math.min(100, (f - 0.5) / state.last * 100)).toFixed(3) + "%";
+  for (let f = 0; f < n;) {
+    const has = state.frames.has(f);
+    let g = f + 1;
+    while (g < n && state.frames.has(g) === has) g++;
+    stops.push(`${has ? on : off} ${at(f)} ${at(g)}`);
+    f = g;
+  }
+  box.style.background = `linear-gradient(to right, ${stops.join(", ")})`;
+}
+
+function updateBadge() {
+  const b = el("badge");
+  if (state.loadingName) { b.hidden = false; b.textContent = `載入中：${state.loadingName}…`; return; }
+  if (!state.info) { b.hidden = true; return; }
+  b.hidden = false;
+  const mode = el("pngMode").checked ? "伺服器渲染 (numpy)" : "WebGL";
+  b.textContent = `${mode} · ${Math.round(state.cam.scale * 100)}%` +
+    (state.viewport ? ` · 內容 ${Math.round(state.viewport[2] - state.viewport[0])}×${Math.round(state.viewport[3] - state.viewport[1])}` : "");
+}
+
+function showPng() {
+  if (!ready()) return;
+  const img = el("png");
+  const hideNames = [...state.hidden].map(i => state.info.slots[i].name).join("|");
+  const dpr = window.devicePixelRatio || 1;
+  const scale = Math.max(0.02, Math.min(4, state.cam.scale * dpr));
+  const q = new URLSearchParams({
+    file: state.file, anim: state.anim, skin: state.skin, frame: String(state.frame),
+    bg: el("bg").value, bones: el("showBones").checked ? "1" : "0",
+    annotate: el("showBoxes").checked ? "1" : "0", tint: el("tint").checked ? "1" : "0",
+    scale: scale.toFixed(3), hide: hideNames, v: state.info.stamp + "-" + state.info.boot,
+  });
+  const url = "/api/frame?" + q;
+  if (img.dataset.url === url) {
+    // 同一張圖：關掉再打開「伺服器渲染」時它被藏起來了，已經載好就直接顯示
+    if (img.dataset.loaded === url) img.style.display = "block";
+    return;
+  }
+  img.dataset.url = url;
+  img.dataset.loaded = "";
+  el("spinner").style.display = "block";
+  img.onload = () => {
+    if (img.dataset.url !== url) return;           // 等的期間已經換成別張
+    img.dataset.loaded = url;
+    el("spinner").style.display = "none";
+    img.style.width = (img.naturalWidth / dpr) + "px";
+    // 等圖的期間關掉了伺服器渲染：不要蓋在 WebGL 畫面上
+    if (el("pngMode").checked) img.style.display = "block";
+  };
+  img.onerror = () => {
+    if (img.dataset.url !== url) return;
+    img.dataset.url = "";                          // 下次重畫再試一次
+    el("spinner").style.display = "none";
+    showError("伺服器渲染失敗");
+  };
+  img.src = url;
+}
+
+// ================================================================ 播放
+let rafId = null, lastTick = 0, waitSince = 0;
+function tick(now) {
+  if (!state.playing) return;
+  const fps = state.info.fps;
+  // 這一格還沒從伺服器拿到就先停在這裡等（不然剛換檔／換動畫時開頭幾格會被跳過去）；
+  // 最多等 2 秒，請求失敗時才不會永遠卡住
+  const ready = state.frames.has(state.frame);
+  if (ready) waitSince = 0; else if (!waitSince) waitSince = now;
+  if (lastTick && (ready || now - waitSince > 2000)) {
+    state.playTime += (now - lastTick) / 1000 * parseFloat(el("speed").value);
+    // 循環播放照引擎：時間在動畫長度處繞回 0，所以「最後一格」（時間＝長度，循環動畫裡和第 0 格同一個姿勢）不會出現。
+    // 以前多播這一格，每圈接縫處同一個姿勢停兩格，看起來像頓了一下
+    // 繞回的判斷要和下面算格數用同一個容差：浮點累加可能停在 5.9999999 秒，算格數已經是最後一格、
+    // 不含容差的比較卻還沒到長度，就會多播一格最後一格
+    const end = state.duration * fps;
+    if (el("loop").checked && end > 0 && state.playTime * fps + 1e-6 >= end) {
+      state.playTime %= state.duration;
+      if (state.playTime * fps + 1e-6 >= end) state.playTime = 0;   // 5.9999999 % 6 還是 5.9999999
+    }
+    let f = Math.floor(state.playTime * fps + 1e-6);
+    if (f > state.last) {
+      if (!el("loop").checked) { setFrame(state.last); stopPlay(); return; }
+      f = state.last;
+    }
+    if (f !== state.frame) setFrame(f);
+  }
+  lastTick = now;
+  rafId = requestAnimationFrame(tick);
+}
+function startPlay() {
+  if (state.last <= 0 || !ready()) return;
+  if (state.frame >= state.last) setFrame(0);    // 從頭播：第 0 格要真的畫出來（只改 state.frame 會直接跳到第 1 格）
+  state.playing = true; lastTick = 0; waitSince = 0;
+  state.playTime = state.frame / state.info.fps;
+  el("play").textContent = "⏸ 暫停";
+  rafId = requestAnimationFrame(tick);
+}
+function stopPlay() {
+  state.playing = false;
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = null;
+  el("play").textContent = "▶ 播放";
+  if (state.info) { writeHash(); redraw(); }       // 播放中不更新網址；停下來時補上目前這一格
+}
+
+// ================================================================ 右側面板
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === t));
+  document.querySelectorAll(".tabbody").forEach(x =>
+    x.classList.toggle("active", x.id === "tab-" + t.dataset.tab));
+});
+
+const STATE_LABEL = { empty: "空", alpha0: "透明", inactive: "未啟用", missingRegion: "缺圖",
+                      clipping: "clip", nonVisual: "", hidden: "隱藏" };
+function renderSlotsTab(fr) {
+  const box = el("tab-slots");
+  const scroll = box.scrollTop;
+  const rows = [];
+  const needle = el("slotFilter").value.trim().toLowerCase();
+  // 篩選時連這一格沒有附件的插槽也列出來：明確在找它，就不該因為這一格是空的而找不到
+  const onlyUsed = state.onlyUsedSlots !== false && !needle;
+  let skipped = 0, matched = 0;
+  // 由上往下＝最後畫的在最上面，跟 Spine 編輯器的插槽順序一樣
+  for (let k = fr.slots.length - 1; k >= 0; k--) {
+    const s = fr.slots[k];
+    if (needle && !state.info.slots[s.index].name.toLowerCase().includes(needle) &&
+        !(s.attachment || "").toLowerCase().includes(needle)) continue;
+    matched++;
+    if (onlyUsed && s.state === "empty" && !state.hidden.has(s.index) && s.index !== state.selSlot) {
+      skipped++;
+      continue;
+    }
+    const meta = state.info.slots[s.index];
+    const off = state.hidden.has(s.index);
+    const drawn = s.state === "drawn" && !off;
+    const blend = meta.blend !== "normal"
+      ? `<span class="tag ${meta.blend.slice(0, 3)}">${meta.blend}</span>` : "";
+    const st = STATE_LABEL[s.state] ? `<span class="tag ${s.state === "clipping" ? "clip" : "st"}">${STATE_LABEL[s.state]}</span>` : "";
+    rows.push(`<div class="row-item${drawn ? "" : " off"}${s.index === state.selSlot ? " sel" : ""}" data-slot="${s.index}">` +
+      `<span class="eye${off ? " off" : ""}" data-eye="${s.index}">${off ? "◌" : "●"}</span>` +
+      `<span class="nm">${escapeHTML(meta.name)}</span>${blend}${st}` +
+      `<span class="att">${s.attachment ? "· " + escapeHTML(s.attachment) : ""}</span>` +
+      (s.index === state.selSlot ? `<span class="open-props" data-props="${s.index}">屬性 ›</span>` : "") +
+      `</div>`);
+  }
+  el("skipCount").textContent = onlyUsed && skipped ? `（${skipped} 個）` : "";
+  el("onlyUsed").disabled = !!needle;
+  el("onlyUsed").parentElement.title = needle ? "篩選時會列出所有符合的插槽，包括這一格沒有附件的" : "";
+  el("slotList").innerHTML = rows.join("") +
+    (needle && !matched ? `<div class="stat" style="padding:6px 4px">沒有插槽或附件名稱包含「${escapeHTML(needle)}」</div>` : "");
+  box.scrollTop = scroll;
+}
+el("onlyUsed").onchange = (e) => {
+  state.onlyUsedSlots = e.target.checked; savePrefs();
+  if (state.info && currentFrame()) renderSlotsTab(currentFrame());
+};
+el("slotFilter").oninput = () => { if (state.info && currentFrame()) renderSlotsTab(currentFrame()); };
+
+// 「只看這個插槽」：藏起其他所有插槽。clipping 遮罩不藏——它們本來就不畫，藏了反而會改掉這個插槽被裁切的樣子
+const isClipSlot = (i) => state.clipSlots.has(i);
+function soloSet(index) {
+  const set = new Set();
+  state.info.slots.forEach((_, i) => { if (i !== index && !isClipSlot(i)) set.add(i); });
+  return set;
+}
+function isSolo(index) {
+  if (!state.info || index < 0) return false;
+  const want = soloSet(index);
+  return want.size > 0 && want.size === state.hidden.size && [...want].every(i => state.hidden.has(i));
+}
+function toggleSolo(index) {
+  if (!state.info || index < 0) return;
+  if (!soloSet(index).size) { flashStatus("沒有其他插槽可以藏"); return; }
+  const hadClip = [...state.hidden].some(isClipSlot);       // 之前藏過遮罩：伺服器那邊要重算
+  state.hidden = isSolo(index) ? new Set() : soloSet(index);
+  refreshVisibility(hadClip);
+  flashStatus(state.hidden.size ? `只看 ${state.info.slots[index].name}` : "全部顯示");
+}
+function updateSoloLink() {            // 屬性分頁標題旁的「只看這個／全部顯示」
+  const link = el("tab-props").querySelector("[data-solo]");
+  if (link) link.textContent = isSolo(+link.dataset.solo) ? "全部顯示" : "只看這個";
+}
+
+el("tab-slots").addEventListener("click", (e) => {
+  if (!ready()) return;                // 換檔途中列表還是舊檔的：點了的索引會被帶到新檔
+  const eye = e.target.closest("[data-eye]");
+  if (eye) {
+    const i = +eye.dataset.eye;
+    if (e.altKey) { toggleSolo(i); return; }
+    if (state.hidden.has(i)) state.hidden.delete(i); else state.hidden.add(i);
+    refreshVisibility(isClipSlot(i));
+    return;
+  }
+  const open = e.target.closest("[data-props]");
+  if (open) { selectSlot(+open.dataset.props, true); return; }
+  const row = e.target.closest("[data-slot]");
+  if (row) { const i = +row.dataset.slot; selectSlot(state.selSlot === i ? -1 : i, false); }
+});
+el("tab-slots").addEventListener("dblclick", (e) => {
+  const row = e.target.closest("[data-slot]");
+  if (row) selectSlot(+row.dataset.slot, true);
+});
+el("tab-slots").addEventListener("mouseover", (e) => {
+  const row = e.target.closest("[data-slot]");
+  const i = row ? +row.dataset.slot : -1;
+  if (i !== state.hoverSlot) { state.hoverSlot = i; drawOverlay(currentFrame()); }
+});
+el("tab-slots").addEventListener("mouseleave", () => { state.hoverSlot = -1; drawOverlay(currentFrame()); });
+
+function updateVisReset() {
+  el("visReset").disabled = state.hidden.size === 0;
+  el("visReset").textContent = state.hidden.size ? `重設可視 (${state.hidden.size})` : "重設可視";
+}
+// 重新載入後，隱藏的插槽、選取的插槽與骨骼依名稱對到新的索引；新檔裡沒有的就放掉
+function remapSelection(prev, info) {
+  const slotAt = new Map(info.slots.map((s, i) => [s.name, i]));
+  const boneAt = new Map(info.bones.map((b, i) => [b.name, i]));
+  const move = (list, map, i) => {
+    const name = i >= 0 && i < list.length ? list[i].name : null;
+    return name !== null && map.has(name) ? map.get(name) : -1;
+  };
+  state.hidden = new Set([...state.hidden].map(i => move(prev.slots, slotAt, i)).filter(i => i >= 0));
+  state.selSlot = move(prev.slots, slotAt, state.selSlot);
+  state.selBone = move(prev.bones, boneAt, state.selBone);
+}
+function refreshVisibility(refetch) {
+  updateVisReset();
+  updateSoloLink();
+  if (refetch) { state.frames.clear(); prefetch(); }
+  setFrame(state.frame);
+}
+el("visReset").onclick = () => {
+  const refetch = [...state.hidden].some(isClipSlot);
+  state.hidden.clear(); refreshVisibility(refetch);
+};
+
+function renderBonesTab() {
+  if (!state.info) { el("boneList").innerHTML = ""; return; }
+  const bones = state.info.bones;
+  const tag = (b) => b.transform !== "normal" ? `<span class="tag">${b.transform}</span>` : "";
+  const needle = el("boneFilter").value.trim().toLowerCase();
+  if (needle) {
+    // 篩選時改成平的列表，後面附上父骨骼，才看得出是哪一支
+    const hits = bones.map((b, i) => i).filter(i => bones[i].name.toLowerCase().includes(needle));
+    el("boneList").innerHTML = hits.map(i => {
+      const b = bones[i];
+      return `<div class="row-item${i === state.selBone ? " sel" : ""}" data-bone="${i}">` +
+        `<span class="nm">${escapeHTML(b.name)}</span>${tag(b)}` +
+        `<span class="att">${b.parent >= 0 ? "← " + escapeHTML(bones[b.parent].name) : "（根）"}</span></div>`;
+    }).join("") || `<div class="stat" style="padding:6px 4px">沒有骨骼名稱包含「${escapeHTML(needle)}」</div>`;
+    return;
+  }
+  const kids = bones.map(() => []);
+  bones.forEach((b, i) => { if (b.parent >= 0) kids[b.parent].push(i); });
+  const build = (i, depth) => {
+    const b = bones[i];
+    const has = kids[i].length;
+    let html = `<div class="row-item${i === state.selBone ? " sel" : ""}" data-bone="${i}" style="padding-left:${4 + depth * 12}px">` +
+      `<span class="toggle" data-fold="${i}">${has ? "▾" : ""}</span><span class="nm">${escapeHTML(b.name)}</span>` +
+      tag(b) + `</div>`;
+    if (has) html += `<div class="kids" data-kids="${i}">` + kids[i].map(k => build(k, depth + 1)).join("") + `</div>`;
+    return html;
+  };
+  const roots = bones.map((b, i) => b.parent < 0 ? i : -1).filter(i => i >= 0);
+  el("boneList").innerHTML = roots.map(r => build(r, 0)).join("");
+}
+el("boneFilter").oninput = () => renderBonesTab();
+function markSelectedBone() {
+  el("tab-bones").querySelectorAll("[data-bone]").forEach(n => n.classList.toggle("sel", +n.dataset.bone === state.selBone));
+}
+el("tab-bones").addEventListener("click", (e) => {
+  const fold = e.target.closest("[data-fold]");
+  if (fold && fold.textContent) {
+    const k = el("tab-bones").querySelector(`[data-kids="${fold.dataset.fold}"]`);
+    if (k) { k.classList.toggle("collapsed"); fold.textContent = k.classList.contains("collapsed") ? "▸" : "▾"; }
+    return;
+  }
+  const row = e.target.closest("[data-bone]");
+  if (row && ready()) {                // 換檔途中列表還是舊檔的
+    const i = +row.dataset.bone;
+    state.selBone = state.selBone === i ? -1 : i;
+    markSelectedBone();
+    redraw();
+  }
+});
+function updateBoneDetail(fr) {
+  const d = document.getElementById("boneDetail");
+  if (!d) return;
+  if (state.selBone < 0) { d.textContent = "點骨骼可在畫面上標出位置"; return; }
+  const b = fr.bones[state.selBone];
+  if (!b || !state.info.bones[state.selBone]) { d.textContent = ""; return; }
+  d.textContent = `${state.info.bones[state.selBone].name}：世界座標 (${b[0].toFixed(1)}, ${b[1].toFixed(1)})` +
+    (b[4] ? "" : "（未啟用）");
+}
+
+function renderEventsTab(anim) {
+  const box = el("tab-events");
+  if (!anim) { box.innerHTML = `<div class="stat">setup pose 沒有事件</div>`; return; }
+  if (!anim.events.length) { box.innerHTML = `<div class="stat">這段動畫沒有事件</div>`; return; }
+  const fps = state.info.fps;
+  box.innerHTML = `<table class="info-table">` + anim.events.map(e => {
+    // int／float 也要跳脫：Spine JSON 讀進來的是原樣，寫成字串就能塞 HTML 進來
+    const extra = [e.int !== undefined ? "int " + escapeHTML(e.int) : "", e.float !== undefined ? "float " + escapeHTML(e.float) : "",
+                   e.string ? "“" + escapeHTML(e.string) + "”" : "", e.audio ? "🔊 " + escapeHTML(e.audio) : ""]
+                   .filter(Boolean).join(" · ");
+    return `<tr class="ev" data-frame="${Math.round(e.time * fps)}"><td>${e.time.toFixed(3)}s<br><span class="stat">#${Math.round(e.time * fps)}</span></td>` +
+      `<td><b>${escapeHTML(e.name)}</b><br><span class="stat">${extra}</span></td></tr>`;
+  }).join("") + `</table>`;
+}
+el("tab-events").addEventListener("click", (e) => {
+  const row = e.target.closest("[data-frame]");
+  if (row) { stopPlay(); setFrame(+row.dataset.frame); }
+});
+function renderMarks(anim) {
+  const box = el("marks");
+  box.innerHTML = "";
+  if (!anim || !state.last) return;
+  const fps = state.info.fps;
+  for (const e of anim.events) {
+    const m = document.createElement("div");
+    m.className = "mark";
+    const f = Math.round(e.time * fps);
+    m.style.left = (f / state.last * 100) + "%";
+    m.title = `${e.name} @ ${e.time.toFixed(3)}s（#${f}）`;
+    m.onclick = () => { stopPlay(); setFrame(f); };
+    box.appendChild(m);
+  }
+}
+
+function renderInfoTab() {
+  const i = state.info;
+  const rows = [
+    ["檔案", escapeHTML(i.file)], ["Spine 版本", escapeHTML(i.version) + ` (${i.format})`],
+    ["影格率", i.fps + " fps"], ["編輯器尺寸", `${i.size[0]} × ${i.size[1]}`],
+    ["骨骼／插槽", `${i.bones.length} / ${i.slots.length}`],
+    ["約束", `IK ${i.constraints.ik} · Transform ${i.constraints.transform} · Path ${i.constraints.path}`],
+    ["造型", escapeHTML(i.skins.join(", ") || "（無）")],
+    ["動畫", i.animations.length + " 段"],
+    ["事件", escapeHTML(i.events.join(", ") || "（無）")],
+    ["圖集", escapeHTML(i.atlas || "（找不到）")],
+    ["貼圖", i.pages.map(p => `${escapeHTML(p.name)} ${p.width}×${p.height}` + (p.exists ? "" : ` <span class="warn">缺檔</span>`)).join("<br>") || "—"],
+  ];
+  let html = `<table class="info-table">` + rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join("") + `</table>`;
+  for (const w of i.warnings) html += `<div class="warnbox">⚠ ${escapeHTML(w)}</div>`;
+  if (i.missingRegions.length) {
+    html += `<div class="badbox">✖ 圖集缺少 ${i.missingRegions.length} 個 region——遊戲端整份骨架會載入失敗（Error reading attachment）：</div>` +
+      `<table class="info-table">` + i.missingRegions.map(m =>
+        `<tr><td>${escapeHTML(m.slot)}</td><td>${escapeHTML(m.path)}<span class="stat"> · ${escapeHTML(m.skin)}</span></td></tr>`).join("") + `</table>`;
+  }
+  el("tab-info").innerHTML = html;
+  if (i.missingRegions.length || i.warnings.length) {
+    document.querySelector('.tab[data-tab="info"]').textContent = i.missingRegions.length ? "資訊 ✖" : "資訊 ⚠";
+  } else {
+    document.querySelector('.tab[data-tab="info"]').textContent = "資訊";
+  }
+}
+
+
+// ================================================================ 插槽屬性
+// 資料由伺服器的 /api/slot 算（與 CLI 的 spec --slot 同一段 Python），這裡只負責排版。
+function selectSlot(index, openTab) {
+  state.selSlot = index;
+  if (openTab && index >= 0) document.querySelector('.tab[data-tab="props"]').click();
+  redraw();
+  const row = el("tab-slots").querySelector(`[data-slot="${index}"]`);
+  if (row) row.scrollIntoView({ block: "nearest" });
+  loadSlotDetail();
+}
+
+let detailTimer = null, detailReq = 0, detailLast = 0;
+let shownDetailSlot = -1;              // 屬性分頁目前顯示的是哪個插槽（-1＝沒有）
+function scheduleSlotDetail() {
+  if (state.selSlot < 0) return;
+  clearTimeout(detailTimer);
+  // 播放中最多每 0.4 秒更新一次；拖時間軸時等停下來再抓
+  const wait = state.playing ? Math.max(0, 400 - (performance.now() - detailLast)) : 120;
+  detailTimer = setTimeout(loadSlotDetail, wait);
+}
+
+async function loadSlotDetail() {
+  if (!ready() || state.selSlot < 0 || state.selSlot >= state.info.slots.length) { renderSlotDetail(null); return; }
+  const id = ++detailReq;
+  detailLast = performance.now();
+  // 換了插槽：先把上一個插槽的內容換掉，免得回應回來之前點到它的連結（「只看這個」、骨骼、關鍵影格）；
+  // 同一個插槽只是換格數時保留舊內容，拖時間軸才不會一直閃
+  if (shownDetailSlot !== state.selSlot) {
+    el("tab-props").innerHTML = `<div class="prop-title">${escapeHTML(state.info.slots[state.selSlot].name)}</div>` +
+      `<div class="stat pending">載入中…</div>`;
+    shownDetailSlot = state.selSlot;
+  }
+  // 用 index 指定插槽：只送名字的話，名稱剛好是數字（例如叫 "3"）的插槽會跟第 3 個插槽搞混
+  const q = new URLSearchParams({ file: state.file, anim: state.anim, skin: state.skin,
+                                  frame: String(state.frame), index: String(state.selSlot) });
+  let d;
+  try { d = await fetch("/api/slot?" + q).then(r => r.json()); } catch (e) { d = { error: String(e) }; }
+  if (id !== detailReq) return;
+  renderSlotDetail(d);
+}
+
+function swatch(hex) {
+  if (!hex) return "—";
+  const alpha = parseInt(hex.slice(7, 9) || "ff", 16) / 255;
+  return `<span class="swatch"><i style="background:${hex.slice(0, 7)};opacity:${alpha}"></i></span>${hex}`;
+}
+const kvTable = (rows) => `<table class="info-table">` +
+  rows.filter(r => r && r[1] !== undefined && r[1] !== null && r[1] !== "")
+      .map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join("") + `</table>`;
+const fmtValue = (v) => Array.isArray(v) ? escapeHTML(v.join(", "))
+  : (typeof v === "boolean" ? (v ? "是" : "否") : escapeHTML(v));
+const chips = (keys, label) => keys.map(k =>
+  `<span class="chip${k.frame === state.frame ? " now" : ""}" data-jump="${k.frame}" title="${k.time}s">` +
+  `#${k.frame}${label ? " " + label(k) : ""}</span>`).join("");
+
+const SLOT_STATE_TEXT = { drawn: "有畫", empty: "沒有附件", alpha0: "透明（alpha 0）",
+  inactive: "骨骼未啟用（skin 限定骨骼）", missingRegion: "圖集缺圖", clipping: "clipping 遮罩",
+  nonVisual: "不畫的附件（bounding box／path／point）", hidden: "被隱藏" };
+
+function renderSlotDetail(d) {
+  const box = el("tab-props");
+  shownDetailSlot = d && d.slot ? d.slot.index : -1;
+  if (!d) {
+    box.innerHTML = `<div class="stat">在畫面上點一下，或在「插槽」分頁點一列（雙擊直接開這裡），` +
+      `就會顯示該插槽的完整屬性；拖時間軸會跟著更新。</div>`;
+    return;
+  }
+  if (d.error) { box.innerHTML = `<div class="badbox">${escapeHTML(d.error)}</div>`; return; }
+  const s = d.slot, a = d.attachment, r = d.region, b = d.bone;
+  let html = `<div class="prop-title">${escapeHTML(s.name)} ` +
+    `<span class="link" style="font-size:11px;font-weight:400" data-solo="${s.index}" title="藏起其他插槽（Alt+點眼睛也可以）">` +
+    `${isSolo(s.index) ? "全部顯示" : "只看這個"}</span></div>` +
+    `<div class="stat">第 ${d.frame ?? 0} 格 · ${escapeHTML(d.animation || "setup pose")}` +
+    (d.skin ? ` · 造型 ${escapeHTML(d.skin)}` : "") + `</div>`;
+
+  html += `<div class="prop-sec">插槽</div>` + kvTable([
+    ["索引", `#${s.index}（第 ${s.drawOrder} 個畫）`],
+    ["狀態", escapeHTML(SLOT_STATE_TEXT[s.state] || s.state)],
+    ["骨骼", `<span class="link" data-bone-link="${b.index}">${escapeHTML(s.bone)}</span>`],
+    ["混色", escapeHTML(s.blend)],
+    ["顏色", swatch(s.color) + (s.color !== s.setupColor
+      ? `<br><span class="stat">setup ${swatch(s.setupColor)}</span>` : "")],
+    (s.darkColor || s.setupDarkColor) ? ["dark color", swatch(s.darkColor) +
+      `<br><span class="stat">遊戲預設不套用（勾 Tint black 才看得到）</span>`] : null,
+    ["setup 附件", escapeHTML(s.setupAttachment || "（無）")],
+    s.clippedBy ? ["被裁切", escapeHTML(s.clippedBy)] : null,
+    s.worldBounds ? ["世界外框", s.worldBounds.join(", ")] : null,
+  ]);
+
+  html += `<div class="prop-sec">附件</div>`;
+  if (!a) html += `<div class="stat">這一格沒有附件</div>`;
+  else {
+    const skip = new Set(["name", "type", "skin", "skinKey", "color", "finalColor", "deform",
+                          "weightedBones", "linkedMesh", "path"]);
+    const rows = [
+      ["名稱", `${escapeHTML(a.name)} <span class="tag">${escapeHTML(a.type)}</span>`],
+      a.skin ? ["造型", escapeHTML(a.skin) + (a.skinKey !== a.name
+        ? `<span class="stat">（登記名 ${escapeHTML(a.skinKey)}）</span>` : "")] : null,
+      a.path && a.path !== a.name ? ["圖片", escapeHTML(a.path)] : null,
+      a.color ? ["附件色", swatch(a.color)] : null,
+      a.finalColor ? ["最終顏色", swatch(a.finalColor) + `<br><span class="stat">骨架色 × 插槽色 × 附件色</span>`] : null,
+    ];
+    for (const [k, v] of Object.entries(a)) if (!skip.has(k)) rows.push([escapeHTML(k), fmtValue(v)]);
+    if (a.weightedBones && a.weightedBones.length) rows.push(["加權骨骼", escapeHTML(a.weightedBones.join(", "))]);
+    else if (a.weightedBones) rows.push(["加權骨骼", "（無，未加權）"]);
+    if (a.linkedMesh) rows.push(["linked mesh", `父 ${escapeHTML(a.linkedMesh.parent)}（${escapeHTML(a.linkedMesh.skin)}）` +
+      (a.linkedMesh.inheritDeform ? "，繼承 deform" : "")]);
+    if (a.deform) rows.push(["deform", a.deform.active ? `作用中，最大位移 ${a.deform.maxOffset}` : "無"]);
+    html += kvTable(rows);
+  }
+
+  if (r) {
+    html += `<div class="prop-sec">圖集區塊</div>`;
+    if (r.missing) html += `<div class="badbox">✖ 圖集裡沒有 ${escapeHTML(r.path)}——${escapeHTML(r.note)}</div>`;
+    else {
+      if (d.attachmentId !== null && d.attachmentId !== undefined) {
+        const v = encodeURIComponent(d.stamp + "-" + state.info.boot);
+        html += `<img class="regionimg" alt="" src="/api/region?file=${encodeURIComponent(state.file)}&att=${d.attachmentId}&v=${v}">`;
+      }
+      html += kvTable([
+        ["名稱", escapeHTML(r.name)], ["貼圖頁", escapeHTML(r.page)],
+        ["位置", r.xy.join(", ")],
+        ["尺寸", r.size.join(" × ") + (r.trimmed
+          ? `<span class="stat">（裁過邊，原始 ${r.orig.join(" × ")}，offset ${r.offset.join(", ")}）</span>` : "")],
+        r.rotate ? ["旋轉", r.rotate + "°（圖集裡轉過，上面的預覽已轉正）"] : null,
+        r.index >= 0 ? ["index", r.index] : null,
+      ]);
+    }
+  }
+
+  html += `<div class="prop-sec">骨骼 <span class="link" data-bone-link="${b.index}">${escapeHTML(b.name)}</span></div>` + kvTable([
+    ["父骨骼", escapeHTML(b.parent || "（根）")],
+    ["世界座標", `${b.world.x}, ${b.world.y}`],
+    ["世界旋轉", b.world.rotation + "°"], ["世界縮放", `${b.world.scaleX}, ${b.world.scaleY}`],
+    ["區域", `x ${b.local.x}, y ${b.local.y}, 旋轉 ${b.local.rotation}°`],
+    ["區域縮放／shear", `${b.local.scaleX}, ${b.local.scaleY} / ${b.local.shearX}, ${b.local.shearY}`],
+    ["setup", `x ${b.setup.x}, y ${b.setup.y}, 旋轉 ${b.setup.rotation}°, 縮放 ${b.setup.scaleX}, ${b.setup.scaleY}`],
+    ["長度／繼承", `${b.length} / ${escapeHTML(b.transform)}`],
+    b.active ? null : ["狀態", "未啟用（skin 限定骨骼，目前造型沒有包含）"],
+  ]);
+
+  const kf = d.keyframes || {};
+  html += `<div class="prop-sec">這段動畫的關鍵影格（點了跳過去）</div>`;
+  if (!Object.keys(kf).length) {
+    html += `<div class="stat">${d.animation ? "這段動畫沒有動到這個插槽" : "setup pose 沒有關鍵影格"}</div>`;
+  } else {
+    const rows = [];
+    if (kf.attachment) rows.push(["換附件", chips(kf.attachment, k => escapeHTML(k.name ?? "（空）"))]);
+    if (kf.color) rows.push(["顏色", chips(kf.color, k => swatch(k.color))]);
+    if (kf.twoColor) rows.push(["雙色", chips(kf.twoColor, k => swatch(k.light))]);
+    for (const item of kf.deform || []) {
+      rows.push([`deform<br><span class="stat">${escapeHTML(item.attachment)}</span>`, chips(item.keys)]);
+    }
+    if (kf.drawOrder) rows.push(["繪製順序", chips(kf.drawOrder, k => "→" + k.order)]);
+    for (const [kind, keys] of Object.entries(kf.bone || {})) rows.push([`骨骼 ${kind}`, chips(keys)]);
+    html += kvTable(rows);
+  }
+  if ((d.animationsTouching || []).length) {
+    html += `<div class="stat" style="margin-top:4px">會動到這個插槽的動畫：${escapeHTML(d.animationsTouching.join("、"))}</div>`;
+  }
+
+  const avail = d.availableAttachments || [];
+  html += `<div class="prop-sec">可放的附件（${avail.length}）</div>` + (avail.length
+    ? avail.map(x => `<div class="avail${x.current ? " cur" : ""}">${x.current ? "◀ " : ""}${escapeHTML(x.name)} ` +
+        `<span class="stat">${escapeHTML(x.type)} · ${escapeHTML(x.skin)}</span></div>`).join("")
+    : `<div class="stat">（沒有）</div>`);
+  const scroll = box.scrollTop;
+  box.innerHTML = html;
+  box.scrollTop = scroll;
+}
+
+el("tab-props").addEventListener("click", (e) => {
+  const jump = e.target.closest("[data-jump]");
+  if (jump) { stopPlay(); setFrame(+jump.dataset.jump); return; }
+  const solo = e.target.closest("[data-solo]");
+  if (solo) { toggleSolo(+solo.dataset.solo); return; }
+  const bone = e.target.closest("[data-bone-link]");
+  if (bone) {
+    state.selBone = +bone.dataset.boneLink;
+    document.querySelector('.tab[data-tab="bones"]').click();
+    // 骨骼列表正在篩選、又篩掉了這一支：清掉篩選，不然跳過去什麼都看不到
+    if (!el("tab-bones").querySelector(`[data-bone="${state.selBone}"]`)) { el("boneFilter").value = ""; renderBonesTab(); }
+    markSelectedBone();
+    const row = el("tab-bones").querySelector(`[data-bone="${state.selBone}"]`);
+    if (row) {
+      for (let k = row.parentElement; k && k.classList.contains("kids"); k = k.parentElement) {
+        if (k.classList.contains("collapsed")) {      // 收合的祖先展開，才看得到
+          k.classList.remove("collapsed");
+          const fold = el("tab-bones").querySelector(`[data-fold="${k.dataset.kids}"]`);
+          if (fold) fold.textContent = "▾";
+        }
+      }
+      row.scrollIntoView({ block: "nearest" });
+    }
+    redraw();
+  }
+});
+
+
+// ================================================================ 上傳
+// 不必把檔案放進瀏覽的資料夾，也能直接看單一份 Spine：按「上傳」選檔，或把檔案／資料夾拖進視窗。
+// 檔案存在伺服器這次專用的暫存資料夾，伺服器結束時刪除。
+const UPLOAD_EXT = /\.(skel|bytes|json|atlas|txt|png|jpe?g|webp)$/i;
+const SKELETON_EXT = /\.(skel|skel\.bytes|json)$/i;
+
+el("uploadBtn").onclick = () => el("uploadInput").click();
+el("uploadInput").onchange = (e) => {
+  const list = [...e.target.files].map(f => ({ path: f.webkitRelativePath || f.name, file: f }));
+  e.target.value = "";
+  if (list.length) uploadFiles(list);
+};
+
+async function readEntry(entry, prefix, out) {
+  if (entry.isFile) {
+    const file = await new Promise((ok, bad) => entry.file(ok, bad));
+    out.push({ path: prefix + entry.name, file });
+  } else if (entry.isDirectory) {
+    const reader = entry.createReader();
+    for (;;) {
+      const batch = await new Promise((ok, bad) => reader.readEntries(ok, bad));
+      if (!batch.length) break;      // readEntries 一次最多回傳 100 個，要讀到空為止
+      for (const child of batch) await readEntry(child, prefix + entry.name + "/", out);
+    }
+  }
+}
+
+async function collectDropped(dt) {
+  const entries = [...(dt.items || [])].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  if (!entries.length) return [...dt.files].map(f => ({ path: f.name, file: f }));
+  const out = [];
+  for (const entry of entries) await readEntry(entry, "", out);
+  return out;
+}
+
+let dragDepth = 0;
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+window.addEventListener("dragenter", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth++; el("dropzone").hidden = false;
+});
+window.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+window.addEventListener("dragleave", (e) => {
+  if (!hasFiles(e)) return;
+  if (--dragDepth <= 0) { dragDepth = 0; el("dropzone").hidden = true; }
+});
+window.addEventListener("drop", async (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; el("dropzone").hidden = true;
+  const list = await collectDropped(e.dataTransfer);
+  if (list.length) uploadFiles(list);
+});
+
+function setUploadStatus(text, bad) {
+  el("status").innerHTML = bad ? `<span class="warn">${escapeHTML(text)}</span>` : escapeHTML(text);
+}
+
+let busy = false;
+function setBusy(on) {
+  busy = on;
+  el("openBtn").disabled = on;
+  el("uploadBtn").disabled = on;
+}
+
+async function uploadFiles(list) {
+  if (busy) { setUploadStatus("上一個上傳／開啟還沒完成", true); return; }
+  setBusy(true);
+  try { await uploadFilesNow(list); } finally { setBusy(false); }
+}
+
+async function uploadFilesNow(list) {
+  const wanted = list.filter(x => UPLOAD_EXT.test(x.path));
+  const ignored = list.length - wanted.length;
+  if (!wanted.some(x => SKELETON_EXT.test(x.path))) {
+    showError("沒有骨架檔：請一起選 .skel（或 Spine 匯出的 .json）、.atlas 與貼圖 .png。" +
+              (ignored ? `\n（另外有 ${ignored} 個不相關的檔案被略過）` : ""));
+    return;
+  }
+  showError("");
+  stopPlay();
+  try {
+    const { id, error } = await fetch("/api/upload/new", { method: "POST" }).then(r => r.json());
+    if (error) throw new Error(error);
+    let done = 0;
+    for (const item of wanted) {
+      setUploadStatus(`上傳中 ${++done}/${wanted.length}：${item.path}`);
+      const q = new URLSearchParams({ id, name: item.path });
+      const res = await fetch("/api/upload/file?" + q, { method: "POST", body: item.file }).then(r => r.json());
+      if (res.error) throw new Error(res.error);
+    }
+    const result = await fetch("/api/upload/done?id=" + id, { method: "POST" }).then(r => r.json());
+    if (result.error) throw new Error(result.error);
+    await loadFiles(true);
+    if (!result.files.length) throw new Error("上傳完成，但裡面找不到可讀的骨架檔（.skel 或 Spine 的 .json）");
+    setUploadStatus(`已上傳 ${wanted.length} 個檔案` + (ignored ? `（略過 ${ignored} 個不相關的檔案）` : "") +
+                    (result.files.length > 1 ? `，含 ${result.files.length} 個骨架檔` : ""));
+    if (await selectFile(result.files[0].path)) warnIncomplete();
+  } catch (e) {
+    showError("上傳失敗：" + (e.message || e));
+    setUploadStatus("上傳失敗", true);
+  }
+}
+
+// 只上傳了 .skel、少了圖集或貼圖時，直接講缺什麼（不然畫面只會是空的）
+function warnIncomplete() {
+  const i = state.info;
+  if (!i || !i.uploaded) return;
+  const missing = [];
+  if (!i.atlas) missing.push(`圖集 ${i.name}.atlas`);
+  for (const p of i.pages) if (!p.exists) missing.push(`貼圖 ${p.name}`);
+  if (missing.length) {
+    showError("這次上傳少了：" + missing.join("、") + "\n" +
+              "只想選 .skel 的話，請改用「📂 開啟」——瀏覽器上傳拿不到檔案原本的資料夾，" +
+              "「開啟」由本機伺服器讀 .skel 所在資料夾裡的圖集與貼圖。\n" +
+              "或把骨架檔、.atlas 與貼圖一起選取後重新上傳（也可以直接拖整個資料夾進來）。");
+  }
+}
+
+// 正在看的檔案拿不到了（它的上傳被刪、從「最近開啟」移除）：關掉，回到空白畫面
+function closeCurrentFile() {
+  state.gen++;                       // 還在載入這個檔案的請求一律作廢
+  state.file = null; state.failed = null; state.lastInfo = null;
+  clearView(); showError("");
+  el("empty").hidden = false;
+  el("status").textContent = el("status").title = "";
+  history.replaceState(null, "", location.pathname);
+  try { localStorage.removeItem("spineview.file"); } catch {}
+}
+
+async function removeUpload(id) {
+  await fetch("/api/upload/remove?id=" + encodeURIComponent(id), { method: "POST" });
+  if (state.file && state.file.startsWith(`@upload/${id}/`)) closeCurrentFile();
+  loadFiles(true);
+}
+
+
+// ================================================================ 開啟（只選 .skel，圖集與貼圖從它所在的資料夾讀）
+// 瀏覽器不會告訴網頁檔案原本在哪個資料夾，所以由本機的伺服器跳出開檔視窗、拿到完整路徑。
+// 讀的是原檔：不必上傳，美術重新匯出時畫面也會自動更新。
+el("openBtn").onclick = async () => {
+  if (busy) return;
+  setBusy(true);
+  try { await openWithDialog(); } finally { setBusy(false); }
+};
+async function openWithDialog() {
+  showError("");
+  setUploadStatus("請在跳出的視窗選 .skel（或 Spine 的 .json）……視窗若被瀏覽器擋住，請看工作列");
+  let res;
+  try { res = await fetch("/api/open/dialog", { method: "POST" }).then(r => r.json()); }
+  catch (e) { res = { error: String(e) }; }
+  await finishOpen(res);
+}
+
+const looksLikePath = (text) => /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(text.trim().replace(/^["']/, ""));
+
+el("search").addEventListener("keydown", async (e) => {
+  if (e.key !== "Enter" || !looksLikePath(el("search").value)) return;
+  e.preventDefault();
+  const path = el("search").value.trim();
+  let res;
+  try { res = await fetch("/api/open/path?path=" + encodeURIComponent(path), { method: "POST" }).then(r => r.json()); }
+  catch (err) { res = { error: String(err) }; }
+  if (await finishOpen(res)) { el("search").value = ""; applyFilter(); }
+});
+
+async function finishOpen(res) {
+  if (res.cancelled) { setUploadStatus("已取消開啟"); return false; }
+  if (res.error) { showError("開啟失敗：" + res.error); setUploadStatus("開啟失敗", true); return false; }
+  showError("");
+  await loadFiles(true);
+  setUploadStatus("已開啟 " + res.title);
+  stopPlay();
+  return await selectFile(res.file);
+}
+
+async function removeOpened(id) {
+  await fetch("/api/open/remove?id=" + encodeURIComponent(id), { method: "POST" });
+  // 移除的正是畫面上這個檔：伺服器已經找不到它，留著只會讓之後每個操作都失敗
+  if (state.file && state.file.startsWith(`@open/${id}/`)) closeCurrentFile();
+  loadFiles(true);
+}
+
+// ================================================================ 滑鼠：縮放、平移、點選
+const stage = el("stage");
+let drag = null;
+stage.addEventListener("mousedown", (e) => {
+  if (e.button !== 0 && e.button !== 1) return;
+  drag = { x: e.clientX, y: e.clientY, cx: state.cam.x, cy: state.cam.y, moved: false };
+  stage.classList.add("dragging");
+});
+window.addEventListener("mouseup", (e) => {
+  if (drag && !drag.moved && e.target.closest && e.target.closest("#stage")) pick(e, true);
+  drag = null; stage.classList.remove("dragging");
+});
+stage.addEventListener("mousemove", (e) => {
+  if (drag) {
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    if (drag.moved) {
+      state.cam.x = drag.cx - dx / state.cam.scale;
+      state.cam.y = drag.cy + dy / state.cam.scale;
+      setZoomCustom();
+      redraw();
+    }
+    return;
+  }
+  pick(e, false);
+});
+stage.addEventListener("mouseleave", () => { el("hover").hidden = true; });
+// 錯誤訊息框在畫面裡：在框上按 ✕、選取文字、捲動，不能同時變成點選插槽、平移或縮放畫面
+for (const type of ["mousedown", "wheel", "dblclick"]) {
+  el("error").addEventListener(type, (e) => e.stopPropagation());
+}
+stage.addEventListener("wheel", (e) => {
+  if (!state.info) return;
+  e.preventDefault();
+  const r = stage.getBoundingClientRect();
+  const cx = e.clientX - r.left, cy = e.clientY - r.top;
+  const [wx, wy] = screenToWorld(cx, cy);
+  const factor = Math.exp(-e.deltaY * 0.0015);
+  state.cam.scale = Math.max(0.01, Math.min(40, state.cam.scale * factor));
+  const [nx, ny] = screenToWorld(cx, cy);
+  state.cam.x += wx - nx; state.cam.y += wy - ny;
+  setZoomCustom();
+  redraw();
+}, { passive: false });
+function setZoomCustom() {
+  state.cam.fit = false;
+  const sel = el("zoom");
+  let opt = sel.querySelector('option[value="custom"]');
+  if (!opt) { opt = document.createElement("option"); opt.value = "custom"; sel.appendChild(opt); }
+  opt.textContent = Math.round(state.cam.scale * 100) + "%";
+  sel.value = "custom";
+}
+
+function pointInTri(px, py, ax, ay, bx, by, cx, cy) {
+  const d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by);
+  const d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy);
+  const d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay);
+  const neg = d1 < 0 || d2 < 0 || d3 < 0, pos = d1 > 0 || d2 > 0 || d3 > 0;
+  return !(neg && pos);
+}
+function pick(e, click) {
+  const fr = currentFrame();
+  if (!fr || el("pngMode").checked) return;
+  const r = stage.getBoundingClientRect();
+  const [wx, wy] = screenToWorld(e.clientX - r.left, e.clientY - r.top);
+  let hit = null;
+  for (let k = fr.draws.length - 1; k >= 0 && !hit; k--) {
+    const d = fr.draws[k];
+    if (state.hidden.has(d.slot)) continue;
+    const b = d.bbox;
+    if (wx < b[0] || wx > b[2] || wy < b[1] || wy > b[3]) continue;
+    const mesh = state.meshes[d.att];
+    if (!mesh) continue;
+    const tri = mesh.tri, xy = d.xy;
+    for (let i = 0; i < tri.length; i += 3) {
+      const a = tri[i] * 2, bb = tri[i + 1] * 2, c = tri[i + 2] * 2;
+      if (pointInTri(wx, wy, xy[a], xy[a + 1], xy[bb], xy[bb + 1], xy[c], xy[c + 1])) { hit = d; break; }
+    }
+  }
+  const box = el("hover");
+  box.hidden = false;
+  const coord = `<span class="dim">(${wx.toFixed(1)}, ${wy.toFixed(1)})</span>`;
+  if (hit) {
+    const meta = state.info.slots[hit.slot];
+    box.innerHTML = `${escapeHTML(meta.name)} <span class="dim">· ${escapeHTML(state.meshes[hit.att].name)} · ${BLEND_NAMES[hit.blend] || hit.blend}</span> ${coord}`;
+  } else box.innerHTML = coord;
+  if (click && ready()) {           // 換檔途中點到的是舊檔的插槽，不能選（索引會被帶到新檔）
+    selectSlot(hit ? hit.slot : -1, !!hit);
+    const row = el("tab-slots").querySelector(`[data-slot="${state.selSlot}"]`);
+    if (row) row.scrollIntoView({ block: "nearest" });
+  }
+}
+
+// ================================================================ 自動更新（作法同 csdview：等檔案寫完才重載）
+const POLL_IDLE = 1500, POLL_SETTLE = 400, SETTLE_MAX = 8000;
+function startWatching() { state.pendingStamp = null; state.pendingSince = 0; setWatchEvery(POLL_IDLE); }
+function setWatchEvery(ms) {
+  if (state.watchEvery === ms) return;
+  state.watchEvery = ms;
+  clearInterval(state.watchTimer);
+  state.watchTimer = setInterval(checkForChanges, ms);
+}
+let checking = false, reloading = null;
+async function checkForChanges() {
+  if (!state.file || !(state.info || state.failed) || !el("autoReload").checked || document.hidden) return;
+  // 正在換檔（畫面上還是上一個檔）：拿新檔的指紋去比舊檔的版本一定不同，會誤判成「檔案被改了」而重載
+  if (state.info && state.info.file !== state.file) return;
+  // 密集輪詢（0.4 秒）時，上一個請求還沒回來就不再發，免得兩個檢查同時觸發重新載入
+  if (checking || reloading) return;
+  checking = true;
+  try { await checkOnce(); } finally { checking = false; }
+}
+function reloadCurrentFile() {
+  if (!reloading && state.file) {
+    // 原本在播就接著播：美術邊匯出邊看循環動畫時，不必每次重新按播放
+    const wasPlaying = state.playing;
+    reloading = selectFile(state.file, true)
+      .then(ok => { if (ok && wasPlaying) startPlay(); return ok; })
+      .finally(() => { reloading = null; });
+  }
+  return reloading;
+}
+async function checkOnce() {
+  let stat;
+  try { stat = await fetch("/api/stat?file=" + encodeURIComponent(state.file)).then(r => r.ok ? r.json() : null); }
+  catch { return; }
+  if (!stat || stat.error || !(state.info || state.failed)) return;
+  if (state.info && state.info.file !== state.file) return;
+  if (!state.info && !state.failed.stamp) {
+    // 上次讀不進來、又沒有指紋（檔案暫時不見、被匯出工具或防毒鎖住）：鎖放開時指紋不一定會變，
+    // 所以不比指紋——伺服器又查得到這個檔案就直接再試一次
+    if (await reloadCurrentFile()) flashStatus("檔案已更新");
+    return;
+  }
+  const stamp = stat.stamp + "-" + stat.boot;
+  const shown = state.info ? state.info.stamp + "-" + state.info.boot : state.failed.stamp;
+  if (stamp === shown) { state.pendingStamp = null; state.pendingSince = 0; setWatchEvery(POLL_IDLE); return; }
+  const now = Date.now();
+  if (state.pendingStamp !== stamp) {      // 還在連續寫檔，等它安定
+    state.pendingStamp = stamp;
+    if (!state.pendingSince) state.pendingSince = now;
+    setWatchEvery(POLL_SETTLE);
+    if (now - state.pendingSince < SETTLE_MAX) return;
+  }
+  state.pendingStamp = null; state.pendingSince = 0;
+  setWatchEvery(POLL_IDLE);
+  if (await reloadCurrentFile()) flashStatus("檔案已更新");
+}
+let flashTimer = null;
+function flashStatus(text) {
+  const b = el("reloadFlash");
+  b.textContent = text; b.hidden = false;
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { b.hidden = true; }, 1600);
+}
+
+// ================================================================ 事件繫結
+el("play").onclick = () => state.playing ? stopPlay() : startPlay();
+// 換動畫時若正在播就接著播（用 [ ] 一段段看動畫時不必每次再按播放）
+function changeAnim() { const was = state.playing; stopPlay(); applyAnim(false); if (was) startPlay(); }
+el("anim").onchange = changeAnim;
+el("skin").onchange = () => { const was = state.playing; stopPlay(); applyAnim(true); if (was) startPlay(); };
+el("timeline").oninput = (e) => { stopPlay(); setFrame(+e.target.value); };
+el("frameNum").oninput = (e) => { stopPlay(); setFrame(+e.target.value); };
+el("prevFrame").onclick = (e) => { stopPlay(); setFrame(state.frame - (e.shiftKey ? 10 : 1)); };
+el("nextFrame").onclick = (e) => { stopPlay(); setFrame(state.frame + (e.shiftKey ? 10 : 1)); };
+el("zoom").onchange = () => { if (el("zoom").value !== "custom") applyZoomSelect(); };
+el("reloadNow").onclick = async () => { if (state.file && await selectFile(state.file, true)) flashStatus("已重新整理"); };
+el("autoReload").onchange = () => { savePrefs(); if (el("autoReload").checked) checkForChanges(); };
+for (const id of ["showBones", "showBoxes", "tint", "bg", "pngMode"]) el(id).onchange = () => { savePrefs(); redraw(); };
+for (const id of ["loop", "speed"]) el(id).addEventListener("change", savePrefs);
+window.addEventListener("resize", () => {
+  applyPanelWidths();                            // 視窗變窄時側欄跟著收，不把畫面擠沒（設定不變）
+  if (state.cam.fit) fitCamera();
+  redraw();
+});
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { checkForChanges(); loadFiles(true); } });
+
+// 時間軸：滑過時提示游標下是第幾格
+el("timeline").addEventListener("mousemove", (e) => {
+  if (!state.info || state.last <= 0) return;
+  const r = e.target.getBoundingClientRect();
+  const f = Math.round(Math.max(0, Math.min(1, (e.clientX - r.left - 7) / Math.max(1, r.width - 14))) * state.last);
+  e.target.title = `第 ${f} 格 · ${(f / state.info.fps).toFixed(3)}s`;
+});
+
+// ---------------------------------------------------------------- 焦點
+// 用滑鼠點過的按鈕、勾選框、時間軸不留焦點；用滑鼠選過的下拉選單也一樣。
+// 不然焦點留在下拉選單上時按 ← → 會改掉選單的值（例如直接換掉動畫），而不是逐格。
+// 用鍵盤（Tab）操作時焦點照常保留。
+let pointerAt = -1e9, keyAt = -1e9, keyTarget = null;
+document.addEventListener("pointerdown", () => { pointerAt = performance.now(); }, true);
+document.addEventListener("keydown", (e) => { keyAt = performance.now(); keyTarget = e.target; }, true);
+const BLUR_AFTER_CLICK = "button, input[type=checkbox], input[type=range]";
+document.addEventListener("click", (e) => {
+  const t = e.target;
+  if (performance.now() - pointerAt < 1500 && t.matches && t.matches(BLUR_AFTER_CLICK)) setTimeout(() => t.blur(), 0);
+}, true);
+document.addEventListener("pointerup", (e) => {
+  if (e.target.matches && e.target.matches("input[type=range]")) setTimeout(() => e.target.blur(), 0);
+}, true);
+document.addEventListener("change", (e) => {
+  const t = e.target;
+  if (t.tagName === "SELECT" && !(keyTarget === t && performance.now() - keyAt < 1000)) t.blur();
+}, true);
+
+// ---------------------------------------------------------------- 鍵盤
+let stepTimer = null, stepTarget = null;
+function stepFile(dir) {
+  const rows = [...document.querySelectorAll("#files .file")].filter(r => r.style.display !== "none");
+  if (!rows.length) return;
+  const cur = stepTarget || state.file;
+  let i = rows.findIndex(r => r.dataset.path === cur);
+  i = i < 0 ? (dir > 0 ? 0 : rows.length - 1) : i + dir;
+  if (i < 0 || i >= rows.length) return;
+  const path = rows[i].dataset.path;
+  rows.forEach(r => r.classList.toggle("active", r === rows[i]));
+  rows[i].scrollIntoView({ block: "nearest" });
+  // 按住方向鍵連跳時只載入停下來的那一個，不讓伺服器把經過的每個檔都解析一遍
+  stepTarget = path;
+  clearTimeout(stepTimer);
+  stepTimer = setTimeout(() => { stepTarget = null; selectFile(path); }, 160);
+}
+function stepAnim(dir) {
+  const sel = el("anim"), n = sel.options.length;
+  if (n <= 1) return;
+  sel.selectedIndex = (sel.selectedIndex + dir + n) % n;
+  changeAnim();
+  flashStatus("動畫：" + (sel.value || "(setup pose)"));
+}
+function toggleHelp(show) {
+  el("help").hidden = show === undefined ? !el("help").hidden : !show;
+}
+el("helpBtn").onclick = () => toggleHelp();
+document.addEventListener("pointerdown", (e) => {
+  if (!el("help").hidden && !e.target.closest("#help, #helpBtn")) toggleHelp(false);
+});
+function onEscape() {
+  if (!el("help").hidden) { toggleHelp(false); return; }
+  if (el("error").style.display === "block") { showError(""); return; }
+  if (state.selBone >= 0) { state.selBone = -1; markSelectedBone(); redraw(); }
+  if (state.selSlot >= 0) selectSlot(-1, false);
+}
+
+document.addEventListener("keydown", (e) => {
+  const t = e.target;
+  if (t.tagName === "INPUT" && t.type !== "range" && t.type !== "checkbox") {
+    // 篩選框：Esc 先清空、再按一次離開；數字框按 Enter 就離開，接著就能用快捷鍵
+    if (e.key === "Escape") {
+      if (t.value && t.type !== "number") { t.value = ""; t.dispatchEvent(new Event("input")); } else t.blur();
+    } else if (e.key === "Enter" && t.type === "number") t.blur();
+    // 檔案篩選框裡 ↑↓ 也切換檔案：打字篩選後可以直接一個個看符合的檔案
+    else if (t.id === "search" && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.altKey && !e.ctrlKey) {
+      e.preventDefault(); stepFile(e.key === "ArrowUp" ? -1 : 1);
+    }
+    return;
+  }
+  if (t.tagName === "SELECT" || t.tagName === "TEXTAREA" || t.isContentEditable) return;
+  if (t.tagName === "BUTTON" && (e.code === "Space" || e.key === "Enter")) return;   // 用 Tab 移到按鈕上時照常按
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "?") { e.preventDefault(); toggleHelp(); return; }
+  if (e.key === "Escape") { onEscape(); return; }
+  if (e.code === "ArrowUp" || e.code === "ArrowDown") { e.preventDefault(); stepFile(e.code === "ArrowUp" ? -1 : 1); return; }
+  if (!ready()) return;                // 沒有骨架、或換檔途中（這時的格數、動畫都還是舊檔的）
+  const step = (n) => { e.preventDefault(); stopPlay(); setFrame(n); };
+  switch (e.code) {
+    case "Space": e.preventDefault(); state.playing ? stopPlay() : startPlay(); break;
+    case "ArrowLeft": step(state.frame - (e.shiftKey ? 10 : 1)); break;
+    case "ArrowRight": step(state.frame + (e.shiftKey ? 10 : 1)); break;
+    case "Home": step(0); break;
+    case "End": step(state.last); break;
+    case "BracketLeft": e.preventDefault(); stepAnim(-1); break;
+    case "BracketRight": e.preventDefault(); stepAnim(1); break;
+    case "KeyF": case "Digit0": case "Numpad0": el("zoom").value = "fit"; applyZoomSelect(); break;
+    case "Digit1": case "Numpad1": el("zoom").value = "1"; applyZoomSelect(); break;
+    case "KeyB": el("showBones").checked = !el("showBones").checked; savePrefs(); redraw(); break;
+  }
+});
+
+// ---------------------------------------------------------------- 存成 PNG（伺服器的 numpy 渲染器，原尺寸、透明背景）
+el("savePng").onclick = async () => {
+  if (!ready()) return;
+  const btn = el("savePng"), label = btn.textContent;
+  btn.disabled = true; btn.textContent = "算圖中…";
+  // 檔名在送出請求時就決定：大檔算圖要好幾秒，等回來時使用者可能已經換了格數或動畫
+  const name = `${state.info.name}_${state.anim || "setup"}_${String(state.frame).padStart(3, "0")}.png`
+    .replace(/[\\/:*?"<>|]+/g, "_");
+  try {
+    const q = new URLSearchParams({
+      file: state.file, anim: state.anim, skin: state.skin, frame: String(state.frame),
+      bg: "none", bones: "0", annotate: "0", tint: el("tint").checked ? "1" : "0", scale: "1",
+      hide: [...state.hidden].map(i => state.info.slots[i].name).join("|"),
+      v: state.info.stamp + "-" + state.info.boot,
+    });
+    const res = await fetch("/api/frame?" + q);
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { msg = (await res.json()).error || msg; } catch {}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    flashStatus("已存成 " + name);
+  } catch (err) {
+    showError("存成 PNG 失敗：" + (err.message || err));
+  } finally {
+    btn.textContent = label; btn.disabled = !state.info;
+  }
+};
+
+// ---------------------------------------------------------------- 側欄寬度
+const PANEL_DEFAULT = { left: 260, right: 320 };
+// state.leftW／rightW 是使用者想要的寬度（存進設定）；實際顯示時再依視窗大小夾住。
+// 視窗暫時縮窄只會讓側欄暫時變窄，放大回來就恢復，不會把設定改掉
+function panelLimits() {
+  const W = window.innerWidth;
+  return { left: [160, Math.max(160, Math.min(560, W * 0.35))], right: [240, Math.max(240, Math.min(760, W * 0.45))] };
+}
+const clampWidth = (v, [lo, hi]) => Math.round(Math.max(lo, Math.min(hi, v)));
+function applyPanelWidths() {
+  const lim = panelLimits();
+  document.body.style.setProperty("--left-w", clampWidth(state.leftW, lim.left) + "px");
+  document.body.style.setProperty("--right-w", clampWidth(state.rightW, lim.right) + "px");
+}
+function setPanelWidths(left, right) {
+  state.leftW = clampWidth(+left || PANEL_DEFAULT.left, [160, 560]);
+  state.rightW = clampWidth(+right || PANEL_DEFAULT.right, [240, 760]);
+  applyPanelWidths();
+}
+for (const side of ["left", "right"]) {
+  const handle = el(side + "Resizer");
+  handle.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("active"); document.body.classList.add("resizing");
+    // 從目前「顯示出來的」寬度開始拖；拖出來的寬度先依目前視窗夾住再記下
+    const lim = panelLimits()[side];
+    const x0 = e.clientX, w0 = clampWidth(side === "left" ? state.leftW : state.rightW, lim);
+    const move = (ev) => {
+      const w = clampWidth(side === "left" ? w0 + (ev.clientX - x0) : w0 - (ev.clientX - x0), lim);
+      if (side === "left") setPanelWidths(w, state.rightW); else setPanelWidths(state.leftW, w);
+      if (state.cam.fit) fitCamera();
+      redraw();
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.classList.remove("active"); document.body.classList.remove("resizing");
+      savePrefs();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up, { once: true });
+    handle.addEventListener("pointercancel", up, { once: true });
+  });
+  handle.addEventListener("dblclick", () => {
+    if (side === "left") setPanelWidths(PANEL_DEFAULT.left, state.rightW); else setPanelWidths(state.leftW, PANEL_DEFAULT.right);
+    savePrefs();
+    if (state.cam.fit) fitCamera();
+    redraw();
+  });
+}
+
+// ---------------------------------------------------------------- 記住設定（只存在這台電腦的瀏覽器）
+const PREF_KEY = "spineview.prefs";
+const PREF_CHECKS = ["showBones", "showBoxes", "tint", "loop", "autoReload"];
+const PREF_SELECTS = ["bg", "speed"];
+function savePrefs() {
+  const p = { leftW: state.leftW, rightW: state.rightW, onlyUsed: state.onlyUsedSlots !== false };
+  for (const id of PREF_CHECKS) p[id] = el(id).checked;
+  for (const id of PREF_SELECTS) p[id] = el(id).value;
+  try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch {}
+}
+function loadPrefs() {
+  let p = {};
+  try { p = JSON.parse(localStorage.getItem(PREF_KEY) || "{}") || {}; } catch {}
+  for (const id of PREF_CHECKS) if (typeof p[id] === "boolean") el(id).checked = p[id];
+  for (const id of PREF_SELECTS) {
+    if (typeof p[id] === "string" && [...el(id).options].some(o => o.value === p[id])) el(id).value = p[id];
+  }
+  if (typeof p.onlyUsed === "boolean") { state.onlyUsedSlots = p.onlyUsed; el("onlyUsed").checked = p.onlyUsed; }
+  setPanelWidths(p.leftW, p.rightW);
+}
+
+(async () => {
+  loadPrefs();
+  resizeCanvases();
+  drawFrameGL(null);
+  renderSlotDetail(null);
+  const files = await loadFiles();
+  const h = readHash();
+  let want = h.file;
+  if (!want) { try { want = localStorage.getItem("spineview.file") || ""; } catch {} }
+  if (want && files.some(f => f.path === want)) {
+    state.wanted = { ...h, file: want };     // 只給這個檔案用（換到別的檔案時 selectFile 會丟掉）
+    for (const id of ["showBones", "showBoxes", "tint", "pngMode"]) if (h[id] === "1") el(id).checked = true;
+    if (h.bg && [...el("bg").options].some(o => o.value === h.bg)) el("bg").value = h.bg;
+    selectFile(want);
+  }
+  setInterval(() => { if (!document.hidden) loadFiles(); }, 20000);
+})();
+</script>
+</body>
+</html>

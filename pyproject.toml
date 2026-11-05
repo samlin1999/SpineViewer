@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spineview"
+version = "1.0.0"
+description = "Spine 骨架動畫（.skel / .json + .atlas）檢視、渲染與檢查工具"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "Pillow>=10.0",
+    "numpy>=1.24",
+]
+
+[project.scripts]
+spineview = "spineview.cli:main"
+
+[tool.setuptools]
+packages = ["spineview"]
+
+[tool.setuptools.package-data]
+spineview = ["web/*.html"]
